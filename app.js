@@ -333,12 +333,12 @@ function flowCal() {
     const k = `${cm}-${String(i + 1).padStart(2, '0')}`, l = by.get(k) || [], pc = l.find(pic);
     return `<button class="cd${k === sel ? ' on' : ''}${k === today ? ' td' : ''}" data-cald="${k}"${l.length ? ` style="--a:${(0.12 + 0.5 * l.length / max).toFixed(2)}"` : ''}>${pc && S.depth >= 3 ? `<img src="${esc(pic(pc))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}<b>${i + 1}</b>${l.length ? `<i>${l.length}</i>` : ''}</button>`;
   }));
-  const list = (by.get(sel) || []).sort(byNew), todo = P.ok ? [...P.rows.values()].filter(r => r.kind === 'task' && (r.data.due === sel || (r.data.doneAt && ymd(new Date(r.data.doneAt)) === sel))) : [];
+  const list = (by.get(sel) || []).sort(byNew), todo = sel ? tasks().filter(t => t.due === sel || (t.doneAt && ymd(new Date(t.doneAt)) === sel)) : [];
   return `<section class="card"><div class="hd"><button class="lnk" data-calm="-1" aria-label="이전 달">‹ 이전</button><h2 style="margin:0">${Y}년 ${M}월</h2><button class="lnk" data-calm="1" aria-label="다음 달">다음 ›</button></div>
 <div class="calw">${'일월화수목금토'.split('').map(d => `<span>${d}</span>`).join('')}</div><div class="cal">${cells.join('')}</div>
 <p class="dim small" style="margin-top:10px">이번 달 ${[...by].filter(([k]) => k.startsWith(cm)).reduce((s, [, l]) => s + l.length, 0)}개. 색이 진할수록 그날 생각을 많이 적었습니다.</p></section>
 ${sel ? `<section class="card"><h2>${fmtDay(new Date(sel).getTime())} ${'일월화수목금토'[new Date(sel).getDay()]}요일</h2>${list.map(n => card(n)).join('') || '<p class="dim">이날 적은 생각이 없습니다.</p>'}
-${todo.length ? `<h3 style="margin:18px 0 6px;font-size:15px">이날의 할 일</h3>${todo.map(r => `<p class="dim" style="margin:6px 0">${r.data.st === 'done' ? '✓ ' : '· '}${esc(r.data.title)}${r.data.cat === 1 ? ' (119)' : ''}</p>`).join('')}` : ''}</section>` : ''}`;
+${todo.length ? `<h3 style="margin:18px 0 6px;font-size:15px">이날의 할 일</h3>${todo.map(t => tRow(t, sel)).join('')}` : ''}</section>` : ''}`;
 }
 function flowTopic() {
   const groups = new Map();
@@ -518,7 +518,7 @@ addEventListener('pointerup', ptrEnd); addEventListener('pointercancel', ptrEnd)
 // ── 화면 그리기와 뒤로가기 ────────────────────────────────────────────
 // 뒤로가기는 "창 닫기 → 이전 화면 → 첫 화면" 순서로만 움직이고 사이트 밖으로 나가지 않습니다.
 const NAV = [], SH = [];
-const TITLES = { home: '홈', map: '지도', time: '흐름', review: '회고' };
+const TITLES = { home: '홈', todo: '할 일', map: '지도', time: '흐름', review: '회고' };
 function render() {
   if (!S.user) return;
   $('#ttl').textContent = TITLES[S.view] || '홈';
@@ -529,14 +529,15 @@ function render() {
   $('#main').className = board ? 'board' : ''; $('#app').classList.toggle('wide', board);
   if (board) return drawMap();
   const top = $('#main').scrollTop;
-  $('#main').innerHTML = S.view === 'time' ? viewTime() : S.view === 'review' ? viewReview() : viewHome();
+  $('#main').innerHTML = S.view === 'todo' ? viewTodo() : S.view === 'time' ? viewTime() : S.view === 'review' ? viewReview() : viewHome();
   $('#main').scrollTop = top;
 }
 const stamp = () => history.pushState({ tfm: NAV.length }, '');
 function go(v) {
   if (v === S.view) return;
   if (S.view === 'home') { NAV.push('home'); stamp(); }   // 탭은 한 겹만 쌓음: 어느 탭에서든 뒤로가기 한 번이면 '오늘'
-  S.view = v; render(); $('#main').scrollTop = 0;
+  S.view = v; if (v === 'todo' && S.qm !== 'urgent') setQm('todo'); else if (v !== 'todo' && S.qm === 'todo') setQm('think');
+  render(); $('#main').scrollTop = 0;
 }
 function show(key, fn) {
   fn.key = key;
@@ -579,7 +580,7 @@ async function drawNode(id) {
 ${n.url ? `<p class="dim" style="margin-top:10px"><a href="${esc(n.url)}" target="_blank" rel="noopener">원본 열기</a>${n.imgSrc ? ` &nbsp; <a href="${esc(n.imgSrc)}" target="_blank" rel="noopener">사진 출처</a>` : ''}</p>` : n.imgSrc ? `<p class="dim" style="margin-top:10px"><a href="${esc(n.imgSrc)}" target="_blank" rel="noopener">사진 출처</a></p>` : ''}
 <section class="evalbox"><div class="hd"><h3>세 관점과 사람들의 욕구</h3>${v ? '<button class="lnk" data-act="persp">다시 평가</button>' : ''}</div>
 ${v ? views(v) + `<p class="dim small" style="margin-top:10px">${v.by ? esc(v.by) + '가 ' : ''}${v.at ? fmtDay(v.at) + '에 ' : ''}평가해 이 카드에 저장했습니다</p>` : '<p class="dim">투자자·고객·경쟁자의 눈으로 이 생각을 보고, 사람들이 어떤 욕구로 원할지 평가합니다. 결과는 이 카드에 저장됩니다.</p><button class="btn pri wide" data-act="persp">평가 받기</button>'}</section>
-<div class="btns"><button class="btn" data-act="organize">AI로 정리</button><button class="btn" data-act="chainGo">줄기 보기</button><button class="btn" data-act="toPlanner">플래너로 보내기</button></div>
+<div class="btns"><button class="btn" data-act="organize">AI로 정리</button><button class="btn" data-act="chainGo">줄기 보기</button><button class="btn" data-act="toPlanner">할 일로 만들기</button></div>
 <h3>이어진 생각 ${ls_.length}개</h3>
 ${ls_.map(({ l, o }) => `<div class="lk"><button data-node="${o.id}">${esc(o.t)}${l.why ? `<small>${esc(l.why)}</small>` : ''}</button><button class="chip ${l.r === 'contra' ? 'red' : ''}" data-act="linkType" data-id="${l.id}">${l.r === 'contra' ? '부딪힘' : '관련'}</button><button class="chip" data-act="linkDel" data-id="${l.id}">끊기</button></div>`).join('')}
 <div class="btns"><button class="btn" data-act="linkAdd">다른 생각과 잇기</button></div>
@@ -694,7 +695,7 @@ const openSettings = () => show('settings', drawSettings);
 function drawSettings() {
   const s = settings();
   sheet(`<h2>설정</h2>
-<div><b>${esc(S.user.email || '')}</b><div class="btns"><button class="btn" data-act="logout">로그아웃</button><a class="btn" href="${CFG.vending}">자판기 열기</a><a class="btn" href="${CFG.planner}">플래너 열기</a><a class="btn" href="${CFG.quest}">한 달 퀘스트</a></div><p class="hint" style="margin-bottom:0">자판기·플래너와 로그인을 함께 씁니다. 여기서 로그아웃하면 그쪽도 로그아웃됩니다.</p></div>
+<div><b>${esc(S.user.email || '')}</b><div class="btns"><button class="btn" data-act="logout">로그아웃</button><a class="btn" href="${CFG.vending}">자판기 열기</a><a class="btn" href="${CFG.quest}">한 달 퀘스트</a></div><p class="hint" style="margin-bottom:0">자판기·플래너와 로그인을 함께 씁니다. 여기서 로그아웃하면 그쪽도 로그아웃됩니다.</p></div>
 ${IP ? '<div class="btns" style="margin-top:0"><button class="btn pri" data-act="install">이 기기에 앱으로 설치</button></div>' : ''}
 <h3>AI</h3><p class="dim">정리·분류는 Gemini, 세 관점 평가와 주간 회고는 Claude, 질문과 만트라는 Grok이 먼저 맡습니다. 키가 없거나 막히면 다음 AI가 대신합니다.</p>
 ${Object.entries(PROV).map(([p, P]) => `<div class="line"><label class="f">${P.name} 키${P.paid ? '' : ' (무료)'}<input id="k_${p}" type="password" autocomplete="off" value="${esc(s[P.key] || '')}" placeholder="${p === 'gemini' ? 'AIza…' : p === 'claude' ? 'sk-ant-…' : 'xai-…'}"></label><label class="f">모델<input id="m_${p}" value="${esc(s[P.model] || P.def)}"></label></div>`).join('')}
@@ -705,6 +706,9 @@ ${Object.entries(PROV).map(([p, P]) => `<div class="line"><label class="f">${P.n
 <h3>알림</h3><div id="notis">${notisHtml(s)}</div>
 <div class="btns"><button class="btn" data-act="notiAdd">＋ 알림 추가</button><button class="btn pri" data-act="pushOn">이 기기에서 알림 켜기</button><button class="btn" data-act="pushTest">테스트</button><button class="btn" data-act="pushOff">이 기기 끄기</button></div>
 <h3>잠금 영역</h3><div><p style="margin:0">가족·건강처럼 사적인 생각은 위쪽 '잠금'을 눌러야 보입니다. ${s.pin ? '비밀번호가 걸려 있습니다.' : '비밀번호는 없습니다.'}</p><div class="btns"><button class="btn" data-act="pinSet">${s.pin ? '비밀번호 바꾸기' : '비밀번호 걸기'}</button>${s.pin ? '<button class="btn" data-act="pinClear">비밀번호 없애기</button>' : ''}</div></div>
+<h3>할 일</h3><label class="f">시간 블록 알림<select data-act="remind" onchange="ACT.remind(this)">${[[-1, '알리지 않음'], [0, '시작할 때'], [5, '5분 전'], [10, '10분 전'], [15, '15분 전'], [30, '30분 전']].map(([v, l]) => `<option value="${v}" ${(s.remindMin ?? 5) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+<p class="dim small" style="margin-top:8px">아래 '이 기기에서 알림 켜기'를 해 둔 기기로 옵니다. 5분 단위로 확인합니다.</p>
+<p class="f">구글 캘린더</p>${gOn() ? '<p class="dim">연결됨. 시간 블록이 구글 캘린더에 올라가고, 캘린더의 다른 일정이 시간표에 함께 보입니다.</p><div class="btns"><button class="btn" data-act="gOff">연결 끄기</button></div>' : GC.state === 'expired' ? '<p class="dim">연결이 끊겼습니다. 다시 연결해 주세요.</p><div class="btns"><button class="btn pri" data-act="gConnect">다시 연결</button></div>' : '<p class="dim">연결하면 시간 블록이 구글 캘린더에 올라가고, 캘린더의 다른 일정이 시간표에 함께 보입니다. 구글 로그인 창이 한 번 뜹니다.</p><div class="btns"><button class="btn pri" data-act="gConnect">구글 캘린더 연결</button></div>'}
 <h3>자판기</h3><p class="hint">자판기에서 남긴 생각, 질문, 메모, 별표와 좋아요한 글을 '자판기에서' 가지로 가져옵니다. 열 때마다 새 것만 자동으로 들어옵니다.</p><div class="btns"><button class="btn" data-act="vfmPull">지금 가져오기</button></div>
 <h3>그림</h3><p class="hint">그림이 없는 생각에 위키미디어 공용의 자유 이용 사진을 하나씩 붙입니다. 마음에 안 드는 것은 생각을 열어 바꿀 수 있습니다.</p><div class="btns"><button class="btn" data-act="fillImages">그림 없는 생각에 사진 붙이기</button></div>
 <h3>기록</h3><div class="btns"><button class="btn" data-act="export">전체 기록 내려받기 (JSON)</button></div>
@@ -739,16 +743,11 @@ async function toggleLock() {
   if (s.pin) { const p = prompt('잠금 영역 비밀번호'); if (p == null) return; if (await sha(p) !== s.pin) return toast('비밀번호가 다릅니다'); }
   S.unlocked = true; render(); toast('잠금 영역을 열었습니다. 한 번 더 누르면 닫힙니다.');
 }
-async function toPlanner(id) {
-  const n = node(id), title = prompt('플래너 할 일로 보낼 문장', n.next || n.t); if (!title) return;
-  const tid = newId() + newId().slice(0, 4);
-  if (sb) {
-    const { error } = await sb.from('planner_items').upsert({ user_id: S.user.id, id: tid, kind: 'task', updated_at: Date.now(), deleted: false, rev: 0,
-      data: { title: title.slice(0, 300), cat: 0, tags: ['생각'], who: '', due: '', note: 'thinkingForMe: ' + n.t, st: 'open', at: Date.now(), doneAt: null } }, { onConflict: 'user_id,id' });
-    if (error) return toast('플래너에 넣지 못했습니다');
-  }
-  (n.todo ||= []).push({ id: tid, title, at: Date.now() }); if ((n.st || 0) < 1) n.st = 1;
-  put(n); openNode(id); toast('플래너 할 일에 넣었습니다', '플래너 열기', () => location.href = CFG.planner);
+function toPlanner(id) {
+  const n = node(id), title = prompt('할 일로 만들 문장', n.next || n.t); if (!title) return;
+  const t = addTask({ title, due: ymd(), from: id });
+  (n.todo ||= []).push({ id: t.id, title, at: Date.now() }); if ((n.st || 0) < 1) n.st = 1;
+  put(n); openNode(id); toast('오늘 할 일에 넣었습니다', '할 일 보기', () => { S.after = () => go('todo'); closeAll(); });
 }
 function addPhoto(id, file) {
   const img = new Image(), url = URL.createObjectURL(file);
@@ -763,44 +762,239 @@ function addPhoto(id, file) {
   img.src = url;
 }
 
-// ── 오늘 할 일: 플래너와 같은 기록(planner_items)을 그대로 읽고 씁니다. 여기서 체크하면 플래너에서도 끝난 일이 됩니다 ──
-const P = { rows: new Map(), ok: false };
-const QM = { think: ['생각', '지금 떠오른 생각을 한 줄로'], todo: ['할 일', '오늘 할 일을 한 줄로'], urgent: ['119', '지금 급한 일을 한 줄로'] };
-async function plannerPull() {
-  let rows;
-  if (TEST) rows = TEST.planner || [];
-  else { if (!sb) return; const { data, error } = await sb.from('planner_items').select('id,kind,data,updated_at').in('kind', ['task', 'block', 'day']).eq('deleted', false).limit(3000); if (error) return console.warn(error); rows = data; }
-  P.rows = new Map(rows.map(r => [r.id, r])); P.ok = true;
+// ── 할 일: 예전 플래너를 이리로 옮김 (업무 성격 6분류 · 시간 블록 · 핵심 3 · 하루 마감 · 구글 캘린더) ──
+// 기록은 생각과 같은 표(think_items)에 kind = task · block · day 로 들어갑니다.
+const CATS = [
+  { n: '분류 전', h: '나중에 성격을 정할 일', dur: 30, c: '#8B95A1', g: '8' },
+  { n: '119 긴급한 일', h: '오늘 반드시 처리', dur: 60, c: '#F04452', g: '11' },
+  { n: '금방 할 수 있는 일', h: '30분 안에 끝낼 일', dur: 30, c: '#00A97F', g: '10' },
+  { n: '오래 고민해야 하는 일', h: '집중 시간 확보', dur: 90, c: '#7C5CFA', g: '3' },
+  { n: '협업이 필요한 일', h: '요청하고 함께 진행', dur: 60, c: '#0CA5C1', g: '9' },
+  { n: '빠르게 시켜야 할 일', h: '아침에 먼저 넘기기', dur: 30, c: '#F59E0B', g: '6' },
+  { n: '중요하게 해야 할 일', h: '긴급하진 않지만 핵심', dur: 60, c: '#3182F6', g: '7' },
+];
+const catOf = i => CATS[i] || CATS[0];
+const QM = { think: ['생각', '지금 떠오른 생각을 한 줄로'], todo: ['할 일', '내일 3시 견적서 보내기 #영업 @김대리'], urgent: ['119', '지금 급한 일을 한 줄로'] };
+function setQm(m) { S.qm = m; const b = $('#qMode'); if (!b) return; b.textContent = QM[m][0]; b.className = 'qm-' + m; $('#quickIn').placeholder = QM[m][1]; }
+const id32 = (n = 14) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => '0123456789abcdefghijklmnopqrstuv'[b & 31]).join('');   // 구글 캘린더 일정 id로도 쓸 수 있는 글자만
+const WD = '일월화수목금토';
+const toDate = s => new Date(s + 'T12:00:00');
+const addD = (d, n) => { const t = toDate(d); t.setDate(t.getDate() + n); return ymd(t); };
+const dDiff = (a, b) => Math.round((toDate(a) - toDate(b)) / DAY);
+const toMin = hm => { const [h, m] = String(hm).split(':').map(Number); return h * 60 + (m || 0); };
+const toHm = m => { m = Math.max(0, Math.min(1439, Math.round(m))); return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+const durText = m => m < 60 ? `${m}분` : m % 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m / 60}시간`;
+const relDay = d => { const n = dDiff(d, ymd()); return n === 0 ? '오늘' : n === 1 ? '내일' : n === -1 ? '어제' : n === 2 ? '모레' : `${fmtDay(toDate(d).getTime())}(${WD[toDate(d).getDay()]})`; };
+
+/* 한 줄 해석 — 예) "내일 3시 견적서 보내기 #영업 @김대리 30분"
+   #태그  @담당  !1~!6 분류  오늘·내일·모레·금요일·다음주 월요일·11월 15일·11/15  3시·오후 3시 반·15:30·10시~12시  30분·1시간  "…까지" = 마감 */
+function parseQuick(raw) {
+  const out = { title: '', tags: [], who: '', cat: null, date: null, due: null, start: null, end: null, dur: null }, t = ymd();
+  let s = ' ' + String(raw).replace(/\s+/g, ' ').trim() + ' ';
+  s = s.replace(/(\d{1,2}:\d{2})\s?[-~]\s?(\d{1,2}:\d{2})/, '$1 ~ $2').replace(/\s?~\s?/g, ' ~ ');
+  s = s.replace(/ #([^\s#@!]+)/g, (m, x) => { if (!out.tags.includes(x)) out.tags.push(x); return ' '; });
+  s = s.replace(/ @([^\s#@!]+)/, (m, w) => { out.who = w; return ' '; });
+  s = s.replace(/ !([0-6])(?= )/, (m, c) => { out.cat = Number(c); return ' '; });
+  let dueOnly = false;
+  const setDate = (d, until) => { if (!out.date) { out.date = d; dueOnly = !!until; } return ' '; };
+  s = s.replace(/ (오늘|내일|모레|글피)(까지)?(?= )/, (m, w, u) => setDate(addD(t, { 오늘: 0, 내일: 1, 모레: 2, 글피: 3 }[w]), u));
+  s = s.replace(/ (?:(이번 ?주|다음 ?주) ?)?([월화수목금토일])요일(까지|에)?(?= )/, (m, wk, d, u) => {
+    const tg = WD.indexOf(d), dw = toDate(t).getDay();
+    return setDate(wk ? addD(addD(t, -((dw + 6) % 7)), (wk.startsWith('다음') ? 7 : 0) + ((tg + 6) % 7)) : addD(t, (tg - dw + 7) % 7), u === '까지');
+  });
+  const md = (mo, da, u) => {
+    mo = Number(mo); da = Number(da); if (mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+    const y = toDate(t).getFullYear(); let d = `${y}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
+    if (dDiff(d, t) < -180) d = `${y + 1}-${d.slice(5)}`;
+    return setDate(d, u === '까지');
+  };
+  s = s.replace(/ (\d{1,2})월 ?(\d{1,2})일(까지|에)?(?= )/, (m, a, b, u) => md(a, b, u) ?? m);
+  s = s.replace(/ (\d{1,2})\/(\d{1,2})(까지)?(?= )/, (m, a, b, u) => md(a, b, u) ?? m);
+  const times = [];
+  const pushTime = (hh, mm, ap) => {
+    hh = Number(hh); mm = Number(mm || 0); if (hh > 24 || mm > 59) return false;
+    if (/오후|저녁|밤/.test(ap || '')) { if (hh < 12) hh += 12; } else if (/오전|아침|새벽/.test(ap || '')) { if (hh === 12) hh = 0; } else if (ap !== 'x' && hh >= 1 && hh <= 6) hh += 12;   // "3시" → 오후 3시
+    times.push(Math.min(hh * 60 + mm, 1439)); return true;
+  };
+  s = s.replace(/ (\d{1,2}):(\d{2})(?= )/g, (m, a, b) => (times.length < 2 && pushTime(a, b, 'x')) ? ' ' : m);
+  s = s.replace(/ (?:(오전|오후|아침|저녁|밤|새벽) ?)?(\d{1,2})시 ?(반|(\d{1,2})분)?(에|부터|까지)?(?= )/g, (m, ap, hh, half, mm) => (times.length < 2 && pushTime(hh, half === '반' ? 30 : mm, ap)) ? ' ' : m);
+  s = s.replace(/ ~ /g, ' ');
+  s = s.replace(/ (\d{1,2})시간(?: ?(\d{1,2})분)?(?: ?동안)?(?= )/, (m, a, b) => { out.dur = Number(a) * 60 + Number(b || 0); return ' '; });
+  if (out.dur == null) s = s.replace(/ (\d{1,3})분(?: ?동안)?(?= )/, (m, a) => { out.dur = Number(a); return ' '; });
+  if (times.length) { out.start = toHm(times[0]); if (times[1] != null) { let e = times[1]; if (e <= times[0] && e + 720 <= 1439) e += 720; if (e > times[0]) out.end = toHm(e); } }
+  if (out.date && (dueOnly || !out.start)) { out.due = out.date; out.date = null; }
+  if (out.start && !out.date) out.date = t;
+  out.title = s.replace(/\s+/g, ' ').trim() || String(raw).trim();
+  return out;
 }
-async function plannerPut(id, kind, patch) {
-  const row = { id, kind, data: { ...(P.rows.get(id)?.data || {}), ...patch }, updated_at: Date.now() };
-  P.rows.set(id, row); P.ok = true; render();
-  if (sb) { const { error } = await sb.from('planner_items').upsert({ ...row, user_id: S.user.id, deleted: false, rev: 0 }, { onConflict: 'user_id,id' }); if (error) toast('플래너에 저장하지 못했습니다. 연결을 확인해 주세요.'); }
+
+const tasks = () => all('task');
+const isOpenT = t => (t.st || 'open') === 'open';
+const blocksOn = d => all('block').filter(b => b.date === d).sort((a, b) => a.start < b.start ? -1 : 1);
+const dayRec = d => S.items.get('day:' + d) || { id: 'day:' + d, kind: 'day', date: d, top: [], note: '' };
+const addTask = f => put({ id: 't' + id32(), kind: 'task', title: String(f.title).slice(0, 300), cat: f.cat ?? 0, tags: f.tags || [], who: f.who || '', due: f.due || '', note: f.note || '', st: 'open', at: Date.now(), doneAt: null, from: f.from || '' }, true);
+function addBlock(f) {
+  const b = put({ id: 'b' + id32(), kind: 'block', date: f.date, start: f.start, end: f.end || toHm(toMin(f.start) + (f.dur || catOf(f.cat).dur)), title: f.title, cat: f.cat ?? 0, taskId: f.taskId || '', done: false }, true);
+  gSoon(); return b;
 }
-function todoCard() {
-  if (!P.ok) return '';
-  const d = ymd(), rows = [...P.rows.values()], tasks = rows.filter(r => r.kind === 'task'), open = t => (t.data.st || 'open') === 'open';
-  const top = new Set(rows.find(r => r.kind === 'day' && r.data.date === d)?.data.top || []);
-  const blocks = rows.filter(r => r.kind === 'block' && r.data.date === d && !r.data.routine).sort((a, b) => String(a.data.start) < String(b.data.start) ? -1 : 1);
-  const timeOf = new Map(blocks.filter(b => b.data.taskId).map(b => [b.data.taskId, `${b.data.start}~${b.data.end || ''}`]));
-  const doneToday = t => t.data.st === 'done' && t.data.doneAt && ymd(new Date(t.data.doneAt)) === d;
-  const rank = t => t.data.cat === 1 ? 0 : top.has(t.id) ? 1 : timeOf.has(t.id) ? 2 : t.data.due && t.data.due <= d ? 3 : 9;
-  const list = tasks.filter(t => (open(t) && rank(t) < 9) || doneToday(t)).sort((a, b) => open(b) - open(a) || rank(a) - rank(b) || String(timeOf.get(a.id) || 'z') .localeCompare(String(timeOf.get(b.id) || 'z')));
-  const free = blocks.filter(b => !b.data.taskId);
-  const left = list.filter(open).length + free.filter(b => !b.data.done).length, more = tasks.filter(t => open(t) && rank(t) === 9).length, wait = tasks.filter(t => t.data.st === 'wait').length;
-  const row = (id, kind, done, title, meta) => `<div class="todo${done ? ' done' : ''}"><button class="ck${done ? ' on' : ''}" data-pdone="${id}" data-kind="${kind}" aria-label="${done ? '끝낸 일 되돌리기' : '끝냄으로 표시'}">${done ? '✓' : ''}</button><span class="rb"><b>${esc(title)}</b>${meta ? `<span class="meta">${meta}</span>` : ''}</span></div>`;
-  return `<section class="card"><div class="hd"><h2>오늘 할 일 ${left ? left + '개' : ''}</h2><a class="lnk" href="${CFG.planner}">플래너 열기</a></div>
-${list.map(t => { const x = t.data, m = [x.cat === 1 ? '<span class="chip urgent">119 긴급</span>' : '', top.has(t.id) ? '<mark>핵심</mark>' : '', timeOf.has(t.id) ? `<span>${timeOf.get(t.id)}</span>` : '', x.due && x.due < d && open(t) ? `<span style="color:var(--red)">${fmtDay(new Date(x.due).getTime())}까지였음</span>` : '', x.who ? `<span>${esc(x.who)}</span>` : '', S.depth >= 3 && x.note ? `<span>${esc(x.note)}</span>` : ''].join(''); return row(t.id, 'task', !open(t), x.title, m); }).join('')}
-${free.map(b => row(b.id, 'block', !!b.data.done, b.data.title, `<span>${b.data.start}~${b.data.end || ''}</span>`)).join('')}
-${list.length + free.length ? '' : '<p class="dim">오늘 잡힌 일이 없습니다. 아래 입력칸 왼쪽 단추를 \'할 일\'이나 \'119\'로 바꿔 적으면 여기에 들어옵니다.</p>'}
-${more || wait ? `<p class="dim small" style="margin-top:10px">${[more ? `날짜 없는 할 일 ${more}개` : '', wait ? `답을 기다리는 일 ${wait}개` : ''].filter(Boolean).join(', ')}는 플래너에 있습니다.</p>` : ''}</section>`;
+// 그날 비어 있는 첫 시간 (시간 블록과 구글 일정을 피해서)
+function freeSlot(d, dur) {
+  const busy = [...blocksOn(d), ...(GC.ev.get(d) || []).filter(e => !e.allDay)].map(b => [toMin(b.start), toMin(b.end)]).sort((a, b) => a[0] - b[0]);
+  let t = d === ymd() ? Math.max(9 * 60, Math.ceil((nowMin() + 5) / 10) * 10) : 9 * 60;
+  for (const [s, e] of busy) { if (t + dur <= s) break; if (e > t) t = e; }
+  return toHm(Math.min(t, 1439 - dur));
 }
 function addTodo(text, urgent) {
   text = text.trim(); if (!text) return;
   bump(true);
-  plannerPut(newId() + newId().slice(0, 4), 'task', { title: text.slice(0, 300), cat: urgent ? 1 : 0, tags: [], who: '', due: ymd(), note: '', st: 'open', at: Date.now(), doneAt: null });
-  toast(urgent ? '119 긴급한 일로 넣었습니다' : '오늘 할 일로 넣었습니다');
-  if (S.view !== 'home') go('home');
+  const p = parseQuick(text), cat = urgent ? 1 : p.cat ?? 0;
+  const t = addTask({ title: p.title, cat, tags: p.tags, who: p.who, due: p.due || (p.start ? '' : ymd()) });
+  if (p.start) addBlock({ date: p.date, start: p.start, end: p.end, dur: p.dur, title: t.title, cat, taskId: t.id });
+  render();
+  toast(`${urgent ? '119 긴급한 일' : '할 일'}로 넣었습니다${p.start ? `. ${relDay(p.date)} ${p.start}` : p.due && p.due !== ymd() ? `. ${relDay(p.due)}까지` : ''}`, '열기', () => openTask(t.id));
+}
+function setDone(t, done) {
+  t.st = done ? 'done' : 'open'; t.doneAt = done ? Date.now() : null; put(t, true);
+  all('block').filter(b => b.taskId === t.id).forEach(b => { b.done = done; put(b, true); });
+  gSoon(); render();
+  if (done) toast('끝냈습니다', '되돌리기', () => setDone(t, false));
+}
+// 그날 볼 할 일: 119 → 핵심 → 시간 잡힌 일 → 그날까지인 일, 그리고 그날 끝낸 일
+function dayList(d) {
+  const top = dayRec(d).top, hasB = new Set(blocksOn(d).map(b => b.taskId));
+  const rank = t => t.cat === 1 ? 0 : top.includes(t.id) ? 1 : hasB.has(t.id) ? 2 : t.due && t.due <= d ? 3 : 9;
+  return tasks().filter(t => (isOpenT(t) && rank(t) < 9) || (t.st === 'done' && t.doneAt && ymd(new Date(t.doneAt)) === d))
+    .sort((a, b) => (b.st !== 'done') - (a.st !== 'done') || rank(a) - rank(b) || (a.at || 0) - (b.at || 0));
+}
+function tRow(t, d = S.td || ymd()) {
+  const c = catOf(t.cat), bl = all('block').find(b => b.taskId === t.id && b.date === d), late = t.due && t.due < d && isOpenT(t), done = t.st === 'done';
+  const meta = [t.cat ? `<span style="color:${c.c};font-weight:700">${t.cat === 1 ? '119 긴급' : esc(c.n)}</span>` : '', dayRec(d).top.includes(t.id) ? '<mark>핵심</mark>' : '',
+    bl ? `<span>${bl.start}~${bl.end}</span>` : '', t.due && t.due !== d ? `<span${late ? ' style="color:var(--red)"' : ''}>${relDay(t.due)}${late ? ' 마감 지남' : '까지'}</span>` : '',
+    t.st === 'wait' ? '<span>답 기다리는 중</span>' : '', t.who ? `<span>@${esc(t.who)}</span>` : '', ...(t.tags || []).map(x => `<span>#${esc(x)}</span>`), S.depth >= 3 && t.note ? `<span>${esc(t.note)}</span>` : ''].join('');
+  return `<div class="todo${done ? ' done' : ''}"><button class="ck${done ? ' on' : ''}" data-tdone="${t.id}" aria-label="${done ? '끝낸 일 되돌리기' : '끝냄으로 표시'}">${done ? '✓' : ''}</button><button class="rb" data-tk="${t.id}"><b>${esc(t.title)}</b>${meta ? `<span class="meta">${meta}</span>` : ''}</button>${isOpenT(t) && !bl ? `<button class="tbtn" data-tsched="${t.id}">시간</button>` : ''}</div>`;
+}
+const bRow = b => { const n = b.date === ymd() && toMin(b.start) <= nowMin() && nowMin() < toMin(b.end);
+  return `<div class="tlr${b.done ? ' done' : ''}${n ? ' now' : ''}"><span class="tm">${b.start}<small>${b.end}</small></span><i class="tbar" style="background:${catOf(b.cat).c}"></i><button class="rb" data-bk="${b.id}"><b>${esc(b.title)}</b><span class="meta"><span>${durText(toMin(b.end) - toMin(b.start))}</span>${n ? '<mark>지금</mark>' : ''}</span></button><button class="ck${b.done ? ' on' : ''}" data-bdone="${b.id}" aria-label="끝냄 표시">${b.done ? '✓' : ''}</button></div>`; };
+const eRow = e => `<div class="tlr ev"><span class="tm">${e.allDay ? '종일' : `${e.start}<small>${e.end}</small>`}</span><i class="tbar"></i><a class="rb" href="${esc(e.link || '#')}" target="_blank" rel="noopener"><b>${esc(e.title)}</b><span class="meta"><span>구글 캘린더</span></span></a></div>`;
+
+function viewTodo() {
+  const m = S.tmode || 'day';
+  return `<div class="seg sub">${[['day', '하루'], ['all', '전체']].map(([k, l]) => `<button data-tmode="${k}" class="${m === k ? 'on' : ''}">${l}</button>`).join('')}</div>` + (m === 'all' ? todoAll() : todoDay());
+}
+function todoDay() {
+  const d = S.td || ymd(), day = dayRec(d), bl = blocksOn(d), ev = GC.ev.get(d) || [], isT = d === ymd(), list = dayList(d);
+  if (gOn()) gEvents(d);
+  const tl = [...bl.map(b => [b.start, bRow(b)]), ...ev.filter(e => !e.allDay).map(e => [e.start, eRow(e)])].sort((a, b) => a[0] < b[0] ? -1 : 1);
+  const top = day.top.map(id => S.items.get(id)).filter(t => t && !t.deleted), left = bl.filter(b => !b.done);
+  return `<section class="card"><div class="hd" style="align-items:center"><button class="ib" data-tday="-1" aria-label="전날">‹</button><h2 style="margin:0;text-align:center">${isT ? '오늘, ' : ''}${fmtDay(toDate(d).getTime())} ${WD[toDate(d).getDay()]}요일${day.closedAt ? ' <span class="chip need">마감</span>' : ''}</h2><button class="ib" data-tday="1" aria-label="다음날">›</button></div>${isT ? '' : '<div style="text-align:center;margin-top:6px"><button class="lnk" data-tday="0">오늘로 돌아가기</button></div>'}</section>
+<section class="card"><div class="hd"><h2>핵심 3가지</h2><span class="dim">${top.filter(t => t.st === 'done').length}/3 끝냄</span></div>${[0, 1, 2].map(i => top[i] ? tRow(top[i], d) : `<button class="slot" data-top="${i}">핵심 ${i + 1} 고르기</button>`).join('')}</section>
+<section class="card"><div class="hd"><h2>시간표</h2><button class="lnk" data-act="blockNew">시간 블록 추가</button></div>${ev.filter(e => e.allDay).map(eRow).join('')}${tl.map(x => x[1]).join('') || '<p class="dim">시간을 붙인 일이 없습니다. 할 일 옆 \'시간\'을 누르면 비어 있는 시간에 들어갑니다.</p>'}</section>
+<section class="card"><div class="hd"><h2>${isT ? '오늘' : '이날'} 할 일 ${list.filter(isOpenT).length}개</h2><button class="lnk" data-tmode="all">전체</button></div>${list.map(t => tRow(t, d)).join('') || '<p class="dim">아래 칸 왼쪽 단추를 \'할 일\'로 바꿔 적어 보세요. "내일 3시 견적서 #영업 @김대리"처럼 적으면 날짜·시간·태그·담당이 붙습니다.</p>'}</section>
+<section class="card"><h2>하루 마감</h2>${day.closedAt
+    ? `${day.note ? `<p style="margin:0 0 6px;font-size:17px;font-weight:600">${esc(day.note)}</p>` : ''}<p class="dim small">${new Date(day.closedAt).toTimeString().slice(0, 5)}에 도장을 찍었습니다</p><div class="btns"><button class="btn" data-act="reopenDay">도장 지우기</button></div>`
+    : `<p class="dim">${left.length ? `못 끝낸 시간 블록이 ${left.length}개 있습니다. 내일 같은 시간으로 넘길 수 있습니다.` : '시간 블록을 모두 끝냈습니다.'}</p><label class="f">하루를 한 줄로<input id="dayNote" value="${esc(day.note || '')}" placeholder="오늘 어땠나요"></label><div class="btns">${left.length ? '<button class="btn" data-act="carry">못 끝낸 블록 내일로</button>' : ''}<button class="btn pri" data-act="closeDay">도장 찍기</button></div>`}</section>`;
+}
+function todoAll() {
+  const ts = tasks(), open = ts.filter(isOpenT), wait = ts.filter(t => t.st === 'wait'), done = ts.filter(t => t.st === 'done').sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  if (!ts.length) return '<section class="card"><h2>아직 할 일이 없습니다</h2><p class="dim">아래 칸 왼쪽 단추를 \'할 일\'이나 \'119\'로 바꿔 한 줄로 적어 보세요. !1~!6을 붙이면 성격이 정해집니다 (!1 긴급, !2 금방, !3 오래 고민, !4 협업, !5 시킬 일, !6 중요).</p></section>';
+  return [1, 6, 3, 4, 5, 2, 0].map(i => { const l = open.filter(t => (t.cat || 0) === i).sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : 1);
+    return l.length ? `<section class="card"><div class="hd"><h2 style="color:${CATS[i].c}">${CATS[i].n}</h2><span class="dim">${l.length}개</span></div><p class="dim small" style="margin:-8px 0 4px">${CATS[i].h}</p>${l.map(t => tRow(t)).join('')}</section>` : ''; }).join('')
+    + (wait.length ? `<section class="card"><h2>넘기고 답을 기다리는 일</h2>${wait.map(t => tRow(t)).join('')}</section>` : '')
+    + `<section class="card"><div class="hd"><h2>끝낸 일 ${done.length}개</h2>${done.length ? `<button class="lnk" data-act="showDone">${S.showDone ? '접기' : '보기'}</button>` : ''}</div>${S.showDone ? done.slice(0, 60).map(t => tRow(t)).join('') : ''}</section>`;
+}
+// 홈에 보이는 오늘 할 일 요약
+function todoCard() {
+  const d = ymd(), list = dayList(d), bl = blocksOn(d).filter(b => !b.taskId), left = list.filter(isOpenT).length + bl.filter(b => !b.done).length;
+  if (!list.length && !bl.length && !tasks().length) return '';
+  return `<section class="card"><div class="hd"><h2>오늘 할 일 ${left ? left + '개' : ''}</h2><button class="lnk" data-go="todo">할 일 탭</button></div>
+${list.slice(0, 7).map(t => tRow(t, d)).join('')}${bl.map(bRow).join('')}${list.length > 7 ? `<p class="dim small">${list.length - 7}개 더 있습니다</p>` : ''}${list.length + bl.length ? '' : '<p class="dim">오늘 잡힌 일이 없습니다.</p>'}</section>`;
+}
+
+// ── 할 일 창들 ──
+const openTask = id => { if (S.items.get(id)) show('task:' + id, () => drawTask(id)); };
+function drawTask(id) {
+  const t = S.items.get(id); if (!t || t.deleted) return history.back();
+  S.selT = id; const d = S.td || ymd(), top = dayRec(d).top.includes(id), bl = all('block').filter(b => b.taskId === id).sort((a, b) => (a.date + a.start) < (b.date + b.start) ? -1 : 1);
+  sheet(`<div class="grab"></div><h2>할 일</h2>
+<label class="f">무엇을<input id="t_title" value="${esc(t.title)}"></label>
+<p class="f">성격</p><div class="catp">${CATS.map((c, i) => `<button data-tcat="${i}" class="${(t.cat || 0) === i ? 'on' : ''}" style="--c:${c.c}">${i === 1 ? '119 긴급' : esc(c.n)}</button>`).join('')}</div>
+<div class="line"><label class="f">언제까지<input id="t_due" type="date" value="${t.due || ''}"></label><label class="f">담당<input id="t_who" value="${esc(t.who || '')}" placeholder="시킬 사람"></label></div>
+<label class="f">태그 (띄어 써서 여러 개)<input id="t_tags" value="${esc((t.tags || []).join(' '))}"></label>
+<label class="f">메모<textarea id="t_note">${esc(t.note || '')}</textarea></label>
+${bl.length ? `<p class="f">붙인 시간</p>${bl.map(b => `<button class="lk" style="width:100%" data-bk="${b.id}">${relDay(b.date)} ${b.start}~${b.end}${b.done ? ' (끝냄)' : ''}</button>`).join('')}` : ''}
+<div class="btns"><button class="btn pri" data-act="tSave">저장</button><button class="btn" data-tsched="${id}">시간 붙이기</button><button class="btn" data-act="tTop">${top ? '핵심에서 빼기' : '핵심으로'}</button><button class="btn" data-act="tWait">${t.st === 'wait' ? '다시 할 일로' : '넘겼어요, 기다리는 중'}</button>${t.from && node(t.from) ? `<button class="btn" data-node="${t.from}">나온 생각 보기</button>` : ''}<button class="btn red" data-act="tDel">지우기</button></div>`);
+}
+const openSched = (tid, bid) => show('sched', () => {
+  const t = tid && S.items.get(tid), b = bid && S.items.get(bid), d = b?.date || S.td || ymd(), dur = b ? toMin(b.end) - toMin(b.start) : catOf(t?.cat).dur, st = b?.start || freeSlot(d, dur);
+  S.sch = { tid, bid };
+  sheet(`<div class="grab"></div><h2>${b ? '시간 블록' : t ? '시간 붙이기' : '시간 블록 추가'}</h2>${t ? `<p class="dim">${esc(t.title)}</p>` : `<label class="f">무엇을<input id="s_title" value="${esc(b?.title || '')}" placeholder="예: 점심, 운동, 회의"></label>`}
+<div class="line"><label class="f">날짜<input id="s_date" type="date" value="${d}"></label><label class="f">시작<input id="s_start" type="time" step="300" value="${st}"></label></div>
+<label class="f">길이<select id="s_dur">${[15, 30, 45, 60, 90, 120, 180, 240].map(m => `<option value="${m}" ${m === dur ? 'selected' : ''}>${durText(m)}</option>`).join('')}${[15, 30, 45, 60, 90, 120, 180, 240].includes(dur) ? '' : `<option value="${dur}" selected>${durText(dur)}</option>`}</select></label>
+<p class="dim small" style="margin-top:8px">비어 있는 첫 시간을 미리 넣어 두었습니다.</p>
+<div class="btns"><button class="btn pri" data-act="schSave">${b ? '저장' : '넣기'}</button>${b ? `<button class="btn" data-bdone="${b.id}">${b.done ? '다시 하기' : '끝냄'}</button><button class="btn red" data-act="bDel">지우기</button>` : ''}</div>`);
+});
+const openTopPick = i => show('top', () => {
+  const d = S.td || ymd(), top = dayRec(d).top, l = tasks().filter(t => isOpenT(t) && !top.includes(t.id)).sort((a, b) => (a.cat === 1 ? -1 : 0) - (b.cat === 1 ? -1 : 0) || (a.due || '9') < (b.due || '9') ? -1 : 1);
+  sheet(`<div class="grab"></div><h2>핵심 ${i + 1} 고르기</h2><p class="dim">오늘 꼭 끝낼 일 하나를 고릅니다.</p>${l.map(t => `<button class="item" data-picktop="${t.id}"><span class="rb"><b>${esc(t.title)}</b><span class="meta"><span>${esc(catOf(t.cat).n)}</span>${t.due ? `<span>${relDay(t.due)}까지</span>` : ''}</span></span></button>`).join('') || '<p class="empty">고를 할 일이 없습니다. 먼저 할 일을 적어 주세요.</p>'}`);
+});
+
+// ── 구글 캘린더 (시간 블록을 올리고, 캘린더의 다른 일정을 시간표에 함께 보여 줌) ──
+const GCAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+const GC = { ev: new Map(), loading: new Set(), state: ls.get('tfm:gcal') ? 'on' : 'off' };
+const gOn = () => GC.state === 'on';
+async function gToken() {
+  let c; try { c = JSON.parse(ls.get('tfm:gtok') || 'null'); } catch { /* 없음 */ }
+  if (c && c.exp > Date.now() + 30e3) return c.t;
+  if (!sb || !CFG.fn) return null;
+  try {
+    const { data } = await sb.auth.getSession();
+    const r = await (await fetch(CFG.fn, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: CFG.key, Authorization: 'Bearer ' + data.session.access_token }, body: JSON.stringify({ op: 'gtoken' }) })).json();
+    if (r.access_token) { ls.set('tfm:gtok', JSON.stringify({ t: r.access_token, exp: Date.now() + ((+r.expires_in || 3600) - 120) * 1000 })); return r.access_token; }
+    if (/reauth|not_connected|no_secret/.test(r.error || '')) { GC.state = 'expired'; GC.why = r.error; }
+  } catch { /* 연결 안 됨 */ }
+  return null;
+}
+async function gfetch(url, opt = {}, retry = true) {
+  const t = await gToken(); if (!t) throw new Error('notoken');
+  const res = await fetch(url, { ...opt, headers: { Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
+  if (res.status === 401 && retry) { ls.set('tfm:gtok', ''); return gfetch(url, opt, false); }
+  return res;
+}
+async function gEvents(d) {
+  if (!gOn() || GC.loading.has(d)) return;
+  GC.loading.add(d); setTimeout(() => GC.loading.delete(d), 120000);
+  try {
+    const from = new Date(d + 'T00:00:00'), to = new Date(d + 'T23:59:59'), hm = x => x.toTimeString().slice(0, 5);
+    const res = await gfetch(`${GCAL}?${new URLSearchParams({ timeMin: from.toISOString(), timeMax: to.toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '50' })}`);
+    if (!res.ok) return;
+    const j = await res.json();
+    GC.ev.set(d, (j.items || []).filter(e => e.status !== 'cancelled' && e.extendedProperties?.private?.tfm !== '1' && e.extendedProperties?.private?.planner !== '1')
+      .map(e => e.start?.date ? { title: e.summary || '(제목 없음)', allDay: true, link: e.htmlLink } : { title: e.summary || '(제목 없음)', link: e.htmlLink, start: hm(new Date(e.start.dateTime)), end: hm(new Date(e.end.dateTime)) }));
+    if (S.view === 'todo') render();
+  } catch { /* 다음에 다시 */ }
+}
+let gTimer = 0;
+const gSoon = () => { if (!gOn()) return; clearTimeout(gTimer); gTimer = setTimeout(gPush, 4000); };
+const gHash = b => [b.date, b.start, b.end, b.title, b.done ? 1 : 0, b.cat || 0].join('|');
+async function gPush() {
+  const since = addD(ymd(), -1), list = [...S.items.values()].filter(b => b.kind === 'block' && (b.deleted ? b.gs : b.gs !== gHash(b) && b.date >= since));
+  for (const b of list.slice(0, 40)) {
+    const url = `${GCAL}/tf${b.id.slice(1)}`;
+    try {
+      if (b.deleted) { const r = await gfetch(url, { method: 'DELETE' }); if (r.ok || r.status === 404 || r.status === 410) { b.gs = ''; put(b, true); } continue; }
+      const body = { summary: (b.done ? '✓ ' : '') + b.title, description: 'thinkingForMe · ' + catOf(b.cat).n, start: { dateTime: `${b.date}T${b.start}:00`, timeZone: 'Asia/Seoul' }, end: { dateTime: `${b.date}T${b.end}:00`, timeZone: 'Asia/Seoul' }, colorId: catOf(b.cat).g, reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: { tfm: '1' } } };
+      let r = await gfetch(url, { method: 'PATCH', body: JSON.stringify(body) });
+      if (r.status === 404) r = await gfetch(GCAL, { method: 'POST', body: JSON.stringify({ ...body, id: 'tf' + b.id.slice(1) }) });
+      if (r.status === 409) r = await gfetch(url, { method: 'PATCH', body: JSON.stringify({ ...body, status: 'confirmed' }) });
+      if (r.ok) { b.gs = gHash(b); put(b, true); } else break;
+    } catch { break; }
+  }
+}
+function gConnect() {
+  if (!sb) return toast('지금은 연결할 수 없습니다');
+  ls.set('tfm:gpending', '1');
+  sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname, scopes: 'https://www.googleapis.com/auth/calendar.events', queryParams: { access_type: 'offline', prompt: 'consent' } } });
 }
 
 // ── 자판기와 잇기 ─────────────────────────────────────────────────────
@@ -848,7 +1042,7 @@ let IP = null;   // 브라우저가 주는 '앱 설치' 기회
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); IP = e; });
 
 // ── 누르기 ───────────────────────────────────────────────────────────
-const ACT = {
+window.ACT = {
   theme: () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; ls.set('tfm:theme', t); },
   close: closeAll, back: () => history.back(), search: () => openSearch(), settings: openSettings, lock: toggleLock, mantra: openMantra,
   edit: () => editNode(S.sel), save: () => saveNode(S.sel), organize: () => organize(S.sel), persp: () => perspectives(S.sel),
@@ -860,7 +1054,25 @@ const ACT = {
   linkType: el => { const l = S.items.get(el.dataset.id); l.r = l.r === 'contra' ? 'rel' : 'contra'; l.by = 'me'; put(l, true);  openNode(S.sel); },
   linkDel: el => { const l = S.items.get(el.dataset.id); l.deleted = true; put(l, true);  openNode(S.sel); },
   fit: () => fitBoard(true, true), zin: () => zoomAt(1.3), zout: () => zoomAt(1 / 1.3),
-  qmode: () => { const ks = Object.keys(QM); S.qm = ks[(ks.indexOf(S.qm || 'think') + 1) % ks.length]; const b = $('#qMode'); b.textContent = QM[S.qm][0]; b.className = S.qm; $('#quickIn').placeholder = QM[S.qm][1]; $('#quickIn').focus(); },
+  qmode: () => { const ks = Object.keys(QM); setQm(ks[(ks.indexOf(S.qm || 'think') + 1) % ks.length]); $('#quickIn').focus(); },
+  blockNew: () => openSched(), schSave: () => {
+    const { tid, bid } = S.sch, t = tid && S.items.get(tid), d = $('#s_date').value || ymd(), st = $('#s_start').value || '09:00', end = toHm(toMin(st) + +$('#s_dur').value);
+    if (bid) { const b = S.items.get(bid); Object.assign(b, { date: d, start: st, end, title: $('#s_title')?.value.trim() || b.title }); put(b, true); gSoon(); }
+    else if (t) addBlock({ date: d, start: st, end, title: t.title, cat: t.cat, taskId: t.id });
+    else { const title = $('#s_title').value.trim(); if (!title) return toast('무엇을 할지 적어 주세요'); addBlock({ date: d, start: st, end, title, cat: 0 }); }
+    toast(`${relDay(d)} ${st}에 넣었습니다`); history.back();
+  },
+  bDel: () => { const b = S.items.get(S.sch.bid); b.deleted = true; put(b, true); gSoon(); toast('시간 블록을 지웠습니다'); history.back(); },
+  tSave: () => { const t = S.items.get(S.selT), v = k => $('#t_' + k).value.trim(); Object.assign(t, { title: v('title') || t.title, cat: +($('.catp .on')?.dataset.tcat || 0), due: v('due'), who: v('who').replace(/^@/, ''), tags: v('tags').split(/\s+/).map(x => x.replace(/^#/, '')).filter(Boolean), note: v('note') }); put(t, true); all('block').filter(b => b.taskId === t.id).forEach(b => { b.title = t.title; b.cat = t.cat; put(b, true); }); gSoon(); toast('저장했습니다'); history.back(); },
+  tTop: () => { const d = S.td || ymd(), day = dayRec(d); day.top ||= []; if (day.top.includes(S.selT)) day.top = day.top.filter(x => x !== S.selT); else if (day.top.length >= 3) return toast('핵심은 3개까지입니다'); else day.top.push(S.selT); put(day, true); drawTask(S.selT); },
+  tWait: () => { const t = S.items.get(S.selT); t.st = t.st === 'wait' ? 'open' : 'wait'; put(t, true); drawTask(S.selT); },
+  tDel: () => { if (!confirm('이 할 일을 지울까요?')) return; const t = S.items.get(S.selT); t.deleted = true; put(t, true); all('block').filter(b => b.taskId === t.id).forEach(b => { b.deleted = true; put(b, true); }); gSoon(); toast('할 일을 지웠습니다'); history.back(); },
+  closeDay: () => { const d = S.td || ymd(), day = dayRec(d); day.note = $('#dayNote').value.trim(); day.closedAt = Date.now(); put(day, true); bump(); render(); toast('오늘을 마감했습니다. 수고하셨습니다.'); },
+  reopenDay: () => { const day = dayRec(S.td || ymd()); delete day.closedAt; put(day, true); render(); },
+  carry: () => { const d = S.td || ymd(); let n = 0; blocksOn(d).filter(b => !b.done).forEach(b => { b.date = addD(d, 1); put(b, true); n++; }); gSoon(); render(); toast(`${n}개를 내일 같은 시간으로 넘겼습니다`); },
+  showDone: () => { S.showDone = !S.showDone; render(); },
+  gConnect, gOff: () => { ['tfm:gcal', 'tfm:gtok'].forEach(k => ls.set(k, '')); GC.state = 'off'; GC.ev.clear(); toast('구글 캘린더 연결을 껐습니다'); history.back(); },
+  remind: el => { const s = settings(); s.remindMin = +el.value; put(s, true); },
   another: () => { S.rs = (S.rs || 0) + 1; render(); },
   chainGo: () => { S.flow = 'chain'; S.chain = S.sel; S.after = () => S.view === 'time' ? render() : go('time'); closeAll(); },
   install: async () => { if (!IP) return; IP.prompt(); await IP.userChoice; IP = null; history.back(); },
@@ -874,11 +1086,20 @@ const ACT = {
   export: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify([...S.items.values()], null, 1)], { type: 'application/json' })); a.download = `thinkingForMe-${ymd()}.json`; a.click(); },
 };
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-pdone],[data-calm],[data-cald],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
+  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-tdone],[data-bdone],[data-tk],[data-bk],[data-tsched],[data-top],[data-picktop],[data-tcat],[data-tday],[data-tmode],[data-calm],[data-cald],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
   if (B.drag > 8 && t.closest('#bd')) return;   // 보드를 끌다가 손을 뗀 것은 누른 것으로 치지 않음
   const d = t.dataset;
-  if (d.act) return ACT[d.act]?.(t);
-  if (d.pdone) { const r = P.rows.get(d.pdone); if (!r) return; if (d.kind === 'block') return plannerPut(r.id, 'block', { done: !r.data.done }); const done = r.data.st === 'done'; return plannerPut(r.id, 'task', { st: done ? 'open' : 'done', doneAt: done ? null : Date.now() }); }
+  if (d.act) return window.ACT[d.act]?.(t);
+  if (d.tdone) { const t = S.items.get(d.tdone); return t && setDone(t, t.st !== 'done'); }
+  if (d.bdone) { const b = S.items.get(d.bdone); if (!b) return; b.done = !b.done; put(b, true); gSoon(); if (SH.at(-1)?.key === 'sched') history.back(); return render(); }
+  if (d.tk) return openTask(d.tk);
+  if (d.bk) return openSched('', d.bk);
+  if (d.tsched) return openSched(d.tsched);
+  if (d.top) return openTopPick(+d.top);
+  if (d.picktop) { const day = dayRec(S.td || ymd()); (day.top ||= []).push(d.picktop); put(day, true); return history.back(); }
+  if (d.tcat) { document.querySelectorAll('.catp button').forEach(b => b.classList.toggle('on', b === t)); return; }
+  if (d.tday) { S.td = d.tday === '0' ? ymd() : addD(S.td || ymd(), +d.tday); return render(); }
+  if (d.tmode) { S.tmode = d.tmode; return render(); }
   if (d.calm) { const [y, m] = (S.calM || ymd().slice(0, 7)).split('-').map(Number), t = new Date(y, m - 1 + +d.calm, 1); S.calM = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`; S.calD = ''; return render(); }
   if (d.cald) { S.calD = d.cald; return render(); }
   if (d.go) return go(d.go);
@@ -905,7 +1126,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('error', e => { const t = e.target; if (t.tagName === 'IMG' && t.classList.contains('th')) { t.removeAttribute('src'); t.style.visibility = 'hidden'; } }, true);
 $('#quick').addEventListener('submit', e => { e.preventDefault(); const i = $('#quickIn'), m = S.qm || 'think'; m === 'think' ? addThought(i.value) : addTodo(i.value, m === 'urgent'); i.value = ''; });
-addEventListener('hashchange', () => { if (location.hash === '#review') { history.replaceState(history.state, '', location.pathname); go('review'); } });
+addEventListener('hashchange', () => { const v = location.hash.slice(1); if (['review', 'todo'].includes(v)) { history.replaceState(history.state, '', location.pathname); go(v); } });
 addEventListener('online', flush);
 addEventListener('resize', () => { if ($('#bd')) applyT(); });
 addEventListener('keydown', e => { if (S.view !== 'map' || /INPUT|TEXTAREA/.test(document.activeElement?.tagName) || !$('#sheet').hidden) return; if (e.key === '+' || e.key === '=') zoomAt(1.2); else if (e.key === '-') zoomAt(1 / 1.2); else if (e.key === '0') fitBoard(true, true); });
@@ -918,15 +1139,15 @@ async function start(user) {
   S.user = user;
   try { JSON.parse(ls.get('tfm:cache') || '[]').forEach(i => S.items.set(i.id, i)); } catch { /* 저장본 없음 */ }
   $('#gate').hidden = true; $('#app').hidden = false;
-  if (location.hash === '#review') S.view = 'review';
+  if (['#review', '#todo'].includes(location.hash)) S.view = location.hash.slice(1);
+  if (S.view === 'todo') setQm('todo');
   history.replaceState({ tfm: 0 }, '', location.pathname); stamp();          // 뒤로가기를 받아 줄 한 칸
   addEventListener('pointerdown', stamp, { once: true });                    // 첫 손길 뒤에 한 칸 더 (브라우저가 손길 없는 칸은 건너뛰기 때문)
   render();
   try { await pull(); } catch (e) { console.warn(e); toast('서버에서 불러오지 못했습니다. 이 기기에 저장해 둔 것을 보여 드립니다.'); }
   opened(); render(); flush();
-  plannerPull().then(render);
   vfmImport();
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && opened()) Promise.all([pull(), plannerPull()]).then(render).then(() => vfmImport()).catch(() => {}); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && opened()) pull().then(render).then(() => vfmImport()).catch(() => {}); });
 }
 async function boot() {
   if ('serviceWorker' in navigator && !TEST) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -937,7 +1158,11 @@ async function boot() {
     sb = window.supabase.createClient(CFG.url, CFG.key, { auth: { persistSession: true, detectSessionInUrl: true, flowType: 'pkce' } });
   } catch { return gate('<p>로그인 도구를 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 열어 주세요.</p><div><button class="btn pri" onclick="location.reload()">다시 열기</button></div>'); }
   const { data } = await sb.auth.getSession();
-  const user = data.session?.user;
+  const user = data.session?.user, ses = data.session;
+  if (ses?.provider_token && ls.get('tfm:gpending')) {   // 구글 캘린더 연결 직후: 이 순간에만 받을 수 있는 토큰을 받아 둠
+    ls.set('tfm:gpending', ''); ls.set('tfm:gtok', JSON.stringify({ t: ses.provider_token, exp: Date.now() + 50 * 60e3 })); ls.set('tfm:gcal', '1'); GC.state = 'on';
+    if (ses.provider_refresh_token) sb.rpc('planner_google_set', { p_token: ses.provider_refresh_token }).then(() => {}, () => {});
+  }
   if (!user) {
     gate('<p>내가 한 생각, 의견, 사업 구상을 한 단어부터 원문까지 깊이를 바꿔 가며 봅니다.</p><div><button class="btn pri" id="loginBtn">Google 계정으로 로그인</button></div>');
     $('#loginBtn').onclick = () => sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } });

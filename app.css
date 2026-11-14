@@ -177,7 +177,7 @@ p,li{text-wrap:pretty}
 h1,h2,h3{text-wrap:balance}
 
 #qMode{flex:none;width:58px;height:50px;border-radius:16px;background:var(--card);font-size:14px;font-weight:700;text-align:center;color:var(--sub);box-shadow:0 1px 3px rgba(0,0,0,.06)}
-#qMode.todo{background:var(--blue2);color:var(--blue)}#qMode.urgent{background:var(--red);color:#fff}
+#qMode.qm-todo{background:var(--blue2);color:var(--blue)}#qMode.qm-urgent{background:var(--red);color:#fff}
 .todo{display:flex;gap:12px;align-items:flex-start;padding:9px 0}
 .ck{flex:none;width:26px;height:26px;border-radius:9px;border:2px solid var(--dim);display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:700}
 .ck.on{background:var(--blue);border-color:var(--blue)}
@@ -195,3 +195,20 @@ h1,h2,h3{text-wrap:balance}
 .cd img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.35}
 .cd.td b{color:var(--blue)}
 .cd.on{box-shadow:inset 0 0 0 2px var(--ink)}
+
+.todo .rb{text-align:left}
+.tbtn{flex:none;align-self:center;padding:6px 10px;border-radius:10px;background:var(--fill);font-size:13px;font-weight:600;color:var(--sub)}
+.slot{display:block;width:100%;padding:13px;margin:6px 0;border-radius:14px;border:1.5px dashed var(--line);color:var(--dim);font-weight:600;text-align:center}
+.tlr{display:flex;gap:12px;align-items:center;padding:9px 0}
+.tlr .tm{flex:none;width:44px;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.25}
+.tlr .tm small{display:block;font-size:12px;font-weight:500;color:var(--dim)}
+.tlr .tbar{flex:none;width:4px;align-self:stretch;border-radius:2px}
+.tlr .rb{text-align:left}
+.tlr.done b{text-decoration:line-through;color:var(--dim)}
+.tlr.now{background:var(--blue2);border-radius:14px;padding:9px 10px;margin:0 -10px}
+.tlr.ev .tbar{background:repeating-linear-gradient(var(--dim) 0 4px,transparent 4px 7px)}
+.tlr.ev b{font-weight:500;color:var(--sub)}
+.catp{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.catp button{padding:8px 12px;border-radius:10px;background:var(--fill);font-size:14px;font-weight:600;color:var(--sub)}
+.catp button.on{background:var(--c);color:#fff}
+.ib{font-size:22px}

@@ -2,6 +2,7 @@
 window.TFM_CONFIG = {
   url: "https://mirbslsgmwfahwitpgsl.supabase.co",
   key: "sb_publishable_bwp_34f04zXo3x-Pfcl5Wg_UwCJV5Pj",
+  fn: "https://mirbslsgmwfahwitpgsl.supabase.co/functions/v1/planner",
   vending: "https://jeffreryinko.github.io/vendingForMe/",
   planner: "https://jeffreryinko.github.io/vendingForMe/planner/",
   quest: "https://jeffreryinko.github.io/vendingForMe/quest/",
