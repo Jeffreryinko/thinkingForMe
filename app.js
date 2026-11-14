@@ -1016,16 +1016,16 @@ function gConnect() {
 // ── 자판기와 잇기 ─────────────────────────────────────────────────────
 // 자판기에서 남긴 생각·질문·메모·별표·좋아요를 생각으로 가져옵니다 (읽기만 함, 자판기 기록은 그대로).
 // 같은 주소(jeffreryinko.github.io)라 이 기기의 자판기 기록을 바로 읽고, 다른 기기 것은 자판기가 올려 둔 서버 칸(kv)에서 읽습니다.
-const VFM_APPS = { ai: 'AI 소식', history: '역사', tools: '도구', deal: '딜', brain: '뇌', book: '책', sisa: '시사' };
+const VFM_APPS = { ai: 'AI 소식', history: '세계사', tools: '도구', deal: '딜', brain: '뇌', book: '책', sisa: '시사', iyagi: '이야기', mental: '멘탈', baedat: '배댓', 'sisa-learn': '세상 읽기 교실', 'deal-learn': '딜 교실', 'ai-learn': 'AI 교실', 'gicho-learn': '기초 교실' };
 async function vfmImport(manual) {
   const src = new Map(), mergeV = (a, b) => Array.isArray(a) && Array.isArray(b) ? [...new Map([...a, ...b].filter(x => x && x.id).map(x => [x.id, x])).values()] : a && b && typeof a === 'object' && typeof b === 'object' ? { ...a, ...b } : (b ?? a);
   if (sb) try {
-    const rs = await Promise.all(['vfm:box:%', 'vfm:%:star', 'vfm:%:memo', 'vfm:likes'].map(pat => sb.from('kv').select('k,v').like('k', pat)));
+    const rs = await Promise.all(['vfm:box:%', 'vfm:%:star', 'vfm:%:memo', 'vfm:likes', 'vfm:trail'].map(pat => sb.from('kv').select('k,v').like('k', pat)));
     rs.forEach(r => (r.data || []).forEach(x => src.set(x.k, x.v)));
   } catch (e) { console.warn(e); }
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
-    if (/^vfm:(box:(qs|think)|[a-z]+:(star|memo)|likes)$/.test(k)) try { src.set(k, mergeV(src.get(k), JSON.parse(localStorage.getItem(k)))); } catch { /* 깨진 값은 건너뜀 */ }
+    if (/^vfm:(box:(qs|think)|[a-z]+:(star|memo)|likes|trail)$/.test(k)) try { src.set(k, mergeV(src.get(k), JSON.parse(localStorage.getItem(k)))); } catch { /* 깨진 값은 건너뜀 */ }
   }
   let added = 0;
   const C = '자판기에서';
@@ -1050,6 +1050,13 @@ async function vfmImport(manual) {
     }
   }
   for (const [id, x] of Object.entries(src.get('vfm:likes') || {})) add('v_l_' + id, { t: x.t || x.key, k: '자료', g: '좋아요한 글', url: /^https?:/.test(x.u || '') ? x.u : '', at: x.at });
+  // 배운 길: 세 자판기 어디서든 '제대로 본 것'(40초 넘게 머묾 또는 3번 넘게 다시 봄)만 생각 지도의 '배운 것' 가지로
+  for (const x of src.get('vfm:trail') || []) {
+    if (!x || !x.id || !((x.d || 0) >= 40 || (x.n || 0) >= 3)) continue;
+    const nid = 'v_tr_' + x.id.replace(/[^\w가-힣:-]/g, '_'), mins = Math.round((x.d || 0) / 60);
+    if (S.items.has(nid.slice(0, 80))) { const o = S.items.get(nid.slice(0, 80)); if ((x.n || 1) > (o.n || 1)) put({ ...o, n: x.n }, true); continue; }
+    add(nid, { t: x.t, k: '자료', g: '배운 것 · ' + (VFM_APPS[x.app] || x.app), s: `${x.n || 1}번 봄${mins ? ` · ${mins}분` : ''}`, n: x.n || 1, url: /^https?:/.test(x.u || '') ? x.u : '', at: x.first || x.at });
+  }
   if (added) {  render(); toast(`자판기에서 ${added}개를 가져왔습니다`, '지도에서 보기', () => go('map')); }
   else if (manual) toast('자판기에서 새로 가져올 것이 없습니다');
 }
