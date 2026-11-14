@@ -118,8 +118,8 @@ const PROV = {
   claude: { name: 'Claude', key: 'ckey', model: 'cmodel', def: 'claude-sonnet-5-5', paid: true, pin: 3, pout: 15 },
 };
 // 일마다 먼저 부를 순서: 자주 하는 정리는 무료 Gemini, 깊게 따져야 하는 평가·회고는 Claude, 짧은 질문·만트라는 Grok
-const ROUTE = { organize: ['gemini', 'grok', 'claude'], judge: ['claude', 'grok', 'gemini'], weekly: ['claude', 'gemini', 'grok'], ask: ['grok', 'gemini', 'claude'], mantra: ['grok', 'gemini', 'claude'] };
-const NEED = { organize: ['t'], judge: ['inv', 'cus', 'com'], weekly: ['text'], ask: ['answer'], mantra: ['list'] };   // 답에 꼭 있어야 하는 칸
+const ROUTE = { work: ['grok', 'claude', 'gemini'], organize: ['gemini', 'grok', 'claude'], judge: ['claude', 'grok', 'gemini'], weekly: ['claude', 'gemini', 'grok'], ask: ['grok', 'gemini', 'claude'], mantra: ['grok', 'gemini', 'claude'] };
+const NEED = { work: ['syn'], organize: ['t'], judge: ['inv', 'cus', 'com'], weekly: ['text'], ask: ['answer'], mantra: ['list'] };   // 답에 꼭 있어야 하는 칸
 const month = () => ymd().slice(0, 7);
 const usd = v => '$' + (+v || 0).toFixed(2);
 const spendOf = () => settings().spend?.[month()] || {};
@@ -201,7 +201,7 @@ async function busy(label, fn, key) {
 // 단추 글자를 '하는 중'으로 바꿔 둠 (창을 다시 그려도 유지)
 function markBusy() {
   document.querySelectorAll('[data-act]').forEach(b => {
-    const k = { organize: 'org:' + S.sel, persp: 'judge:' + S.sel, weekly: 'weekly', mantraAi: 'mantra', askQ: 'ask' }[b.dataset.act];
+    const k = { wAI: 'work:' + S.selW, organize: 'org:' + S.sel, persp: 'judge:' + S.sel, weekly: 'weekly', mantraAi: 'mantra', askQ: 'ask' }[b.dataset.act];
     if (!k) return;
     if (!b.dataset.label) b.dataset.label = b.textContent;
     const on = RUN.has(k); b.classList.toggle('loading', on); b.textContent = on ? '하는 중…' : b.dataset.label;
@@ -315,6 +315,7 @@ function viewHome() {
 <h1 class="mantra"><span>${esc(s.mantra || '오늘 되뇔 한 문장을 골라 보세요')}</span></h1>
 <p class="by">${src ? `${fmtDay(src.at)}에 내가 한 말` : '내가 고른 문장'}<button class="lnk" data-act="mantra">바꾸기</button></p></section>
 ${todoCard()}
+${worksStrip()}
 <section class="card"><div class="hd"><h2>오늘 ${used}번 열었어요</h2><span class="dim">${used >= 5 ? '오늘 목표를 채웠어요' : `5번까지 ${5 - used}번`}</span></div>
 <div class="prog"><i style="width:${Math.min(used / 5, 1) * 100}%"></i></div>
 <div class="kv"><div><b>${ns.length}</b><span>쌓인 생각</span></div><div><b>${ns.filter(n => moved(n, wk)).length}</b><span>이번 주</span></div><div><b>${st}일</b><span>연속</span></div><div><b>${links().length}</b><span>연결</span></div></div></section>
@@ -567,7 +568,7 @@ function orbitTo(i) { const k = (S.mpath || []).length - i; if (k > 0) { S.popN 
 // ── 화면 그리기와 뒤로가기 ────────────────────────────────────────────
 // 뒤로가기는 "창 닫기 → 이전 화면 → 첫 화면" 순서로만 움직이고 사이트 밖으로 나가지 않습니다.
 const NAV = [], SH = [];
-const TITLES = { home: '홈', todo: '할 일', map: '지도', time: '흐름', review: '회고' };
+const TITLES = { home: '홈', todo: '할 일', works: '작품', map: '지도', time: '흐름', review: '회고' };
 function render() {
   if (!S.user) return;
   $('#ttl').textContent = TITLES[S.view] || '홈';
@@ -578,14 +579,14 @@ function render() {
   $('#main').className = board ? 'board' : ''; $('#app').classList.toggle('wide', board);
   if (board) return drawMap();
   const top = $('#main').scrollTop;
-  $('#main').innerHTML = phoneMap ? viewOrbit() : S.view === 'todo' ? viewTodo() : S.view === 'time' ? viewTime() : S.view === 'review' ? viewReview() : viewHome();
+  $('#main').innerHTML = phoneMap ? viewOrbit() : S.view === 'todo' ? viewTodo() : S.view === 'works' ? viewWorks() : S.view === 'time' ? viewTime() : S.view === 'review' ? viewReview() : viewHome();
   $('#main').scrollTop = top;
 }
 const stamp = () => history.pushState({ tfm: NAV.length }, '');
 function go(v) {
   if (v === S.view) return;
   if (S.view === 'home') { NAV.push('home'); stamp(); }   // 탭은 한 겹만 쌓음: 어느 탭에서든 뒤로가기 한 번이면 '오늘'
-  S.view = v; if (v === 'todo' && S.qm !== 'urgent') setQm('todo'); else if (v !== 'todo' && S.qm === 'todo') setQm('think');
+  S.view = v; if (v === 'todo' && S.qm !== 'urgent') setQm('todo'); else if (v === 'works') setQm('work'); else if (S.qm === 'todo' || S.qm === 'work') setQm('think');
   render(); $('#main').scrollTop = 0;
 }
 function show(key, fn) {
@@ -823,7 +824,7 @@ const CATS = [
   { n: '중요하게 해야 할 일', h: '긴급하진 않지만 핵심', dur: 60, c: '#3182F6', g: '7' },
 ];
 const catOf = i => CATS[i] || CATS[0];
-const QM = { think: ['생각', '지금 떠오른 생각을 한 줄로'], todo: ['할 일', '내일 3시 견적서 보내기 #영업 @김대리'], urgent: ['119', '지금 급한 일을 한 줄로'] };
+const QM = { think: ['생각', '지금 떠오른 생각을 한 줄로'], work: ['작품', '오징어 게임 드라마 봤음 ★4'], todo: ['할 일', '내일 3시 견적서 보내기 #영업 @김대리'], urgent: ['119', '지금 급한 일을 한 줄로'] };
 function setQm(m) { S.qm = m; const b = $('#qMode'); if (!b) return; b.textContent = QM[m][0]; b.className = 'qm-' + m; $('#quickIn').placeholder = QM[m][1]; }
 const id32 = (n = 14) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => '0123456789abcdefghijklmnopqrstuv'[b & 31]).join('');   // 구글 캘린더 일정 id로도 쓸 수 있는 글자만
 const WD = '일월화수목금토';
@@ -988,6 +989,129 @@ const openTopPick = i => show('top', () => {
   sheet(`<div class="grab"></div><h2>핵심 ${i + 1} 고르기</h2><p class="dim">오늘 꼭 끝낼 일 하나를 고릅니다.</p>${l.map(t => `<button class="item" data-picktop="${t.id}"><span class="rb"><b>${esc(t.title)}</b><span class="meta"><span>${esc(catOf(t.cat).n)}</span>${t.due ? `<span>${relDay(t.due)}까지</span>` : ''}</span></span></button>`).join('') || '<p class="empty">고를 할 일이 없습니다. 먼저 할 일을 적어 주세요.</p>'}`);
 });
 
+// ── 작품: 영화·드라마·미드·애니·책·웹툰 — 보는 중·다 봄·볼 것, 정보·히스토리·배경·파생·느낀 거 ──
+// 기록: kind 'work' = { title, orig, type, st(want·doing·done·drop), prog, rate(1~5), start, end, year, creator, cast, genre, country, len,
+//   syn(줄거리), hist(히스토리: 만들어진 과정), bg(배경: 시대·세계관·실제 사건), der[{t, rel}](파생·관련), sim[](비슷한 작품), img, wiki, notes[{at, text, nid}], aiAt, aiBy }
+const WTYPES = ['영화', '드라마', '미드', '애니', '책', '웹툰', '다큐', '기타'];
+const WST = { doing: '보는 중', done: '다 봄', want: '볼 것', drop: '그만 봄' };
+const works = () => all('work');
+const stars = (r, id) => `<span class="stars">${[1, 2, 3, 4, 5].map(i => id ? `<button data-wrate="${id}:${i}" aria-label="${i}점" class="${i <= (r || 0) ? 'on' : ''}">★</button>` : `<i class="${i <= (r || 0) ? 'on' : ''}">★</i>`).join('')}</span>`;
+const poster = (w, cls = 'pst') => w.img ? `<img class="${cls}" src="${esc(w.img)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="${cls} tile" style="background:${pal(w.type || '기타')[0]};color:${pal(w.type || '기타')[1]}">${esc(w.title.slice(0, 12))}</span>`;
+// 한 줄로 적기: "오징어 게임 시즌2 드라마 봤음 ★4", "듄 책 볼 것", "삼체 보는중 3화"
+function addWork(text) {
+  text = text.trim(); if (!text) return;
+  bump(true);
+  let s = ' ' + text + ' ', st = 'doing', type = '', rate = 0, prog = '';
+  s = s.replace(/ (봤음|봤다|다 ?봄|완독|다 ?읽음|끝)(?= )/, () => { st = 'done'; return ' '; })
+       .replace(/ (볼 ?것|볼 ?거|보고 ?싶음|찜|읽을 ?것)(?= )/, () => { st = 'want'; return ' '; })
+       .replace(/ (보는 ?중|읽는 ?중|보는중)(?= )/, () => { st = 'doing'; return ' '; })
+       .replace(/ (그만 ?봄|하차)(?= )/, () => { st = 'drop'; return ' '; })
+       .replace(/ (?:★|별)\s?([1-5])(?= )/, (m, r) => { rate = +r; return ' '; })
+       .replace(/ ([1-5])점(?= )/, (m, r) => { rate = +r; return ' '; })
+       .replace(/ ((?:시즌|S)\s?\d+\s?(?:[E화]\s?\d+)?|\d+\s?(?:화|회|쪽|권|장)(?:까지)?)(?= )/i, (m, p) => { prog = p; return ' '; });
+  for (const t of WTYPES) { const re = new RegExp(` ${t}(?= )`); if (re.test(s)) { type = t; s = s.replace(re, ' '); break; } }
+  const title = s.replace(/\s+/g, ' ').trim() || text;
+  const old = works().find(w => w.title.replace(/\s/g, '') === title.replace(/\s/g, ''));
+  if (old) { Object.assign(old, { st, ...(rate ? { rate } : {}), ...(prog ? { prog } : {}), ...(st === 'done' && !old.end ? { end: ymd() } : {}) }); put(old, true); render(); return toast(`'${old.title}'을 ${WST[st]}으로 바꿨습니다`, '열기', () => openWork(old.id)); }
+  const w = put({ id: 'w' + id32(), kind: 'work', title, type: type || '기타', st, rate, prog, start: st === 'want' ? '' : ymd(), end: st === 'done' ? ymd() : '', notes: [], at: Date.now() }, true);
+  render();
+  const go_ = () => openWork(w.id);
+  toast(`'${title}'을 ${WST[st]}에 넣었습니다`, settings().gkey || settings().xkey || settings().ckey ? 'AI로 정보 채우기' : '열기', () => { go_(); if (settings().gkey || settings().xkey || settings().ckey) setTimeout(() => workAI(w.id), 300); });
+}
+function viewWorks() {
+  const ws = works(), m = S.wmode || 'doing', yr = String(new Date().getFullYear());
+  const list = ws.filter(w => m === 'all' || w.st === m || (m === 'done' && w.st === 'drop')).sort((a, b) => (b.end || b.start || '').localeCompare(a.end || a.start || '') || (b.at || 0) - (a.at || 0));
+  const doneY = ws.filter(w => w.st === 'done' && (w.end || '').startsWith(yr)), byType = new Map(); doneY.forEach(w => byType.set(w.type, (byType.get(w.type) || 0) + 1));
+  return `<div class="seg sub">${[['doing', '보는 중'], ['done', '다 봄'], ['want', '볼 것'], ['all', '전체']].map(([k, l]) => `<button data-wmode="${k}" class="${m === k ? 'on' : ''}">${l} ${ws.filter(w => k === 'all' || w.st === k || (k === 'done' && w.st === 'drop')).length}</button>`).join('')}</div>
+${ws.length ? `<section class="card"><h2 class="big">올해 ${doneY.length}편을 다 봤습니다</h2><p class="dim">${[...byType].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(' · ') || '아직 다 본 작품이 없습니다'}${ws.some(w => w.rate) ? ` · 평균 별 ${(ws.filter(w => w.rate).reduce((s, w) => s + w.rate, 0) / ws.filter(w => w.rate).length).toFixed(1)}` : ''}</p></section>` : ''}
+<section class="card">${list.length ? `<div class="wgrid">${list.map(w => `<button class="wcard" data-wk="${w.id}">${poster(w)}<b>${esc(w.title)}</b><span class="meta"><span>${esc(w.type || '')}${w.year ? ' · ' + esc(w.year) : ''}</span>${w.prog && w.st === 'doing' ? `<span>${esc(w.prog)}</span>` : ''}${w.st === 'drop' ? '<span>그만 봄</span>' : ''}</span>${w.rate ? stars(w.rate) : ''}</button>`).join('')}</div>`
+    : `<h2>${m === 'want' ? '볼 작품이 없습니다' : m === 'done' ? '다 본 작품이 없습니다' : '보고 있는 작품이 없습니다'}</h2><p class="dim">아래 칸 왼쪽 단추를 '작품'으로 바꿔 적어 보세요. 예: "오징어 게임 드라마 봤음 ★4", "삼체 책 읽는중 120쪽", "듄 영화 볼 것". 넣은 뒤 'AI로 정보 채우기'를 누르면 작품 정보·히스토리·배경·파생 작품이 채워집니다.</p>`}</section>`;
+}
+// 홈: 지금 보는 작품
+function worksStrip() {
+  const l = works().filter(w => w.st === 'doing'); if (!l.length) return '';
+  return `<section class="card"><div class="hd"><h2>보고 있는 작품</h2><button class="lnk" data-go="works">전체</button></div><div class="wrow">${l.map(w => `<button class="wcard" data-wk="${w.id}">${poster(w)}<b>${esc(w.title)}</b>${w.prog ? `<span class="meta"><span>${esc(w.prog)}</span></span>` : ''}</button>`).join('')}</div></section>`;
+}
+const openWork = id => { if (S.items.get(id)) show('work:' + id, () => drawWork(id)); };
+function drawWork(id) {
+  const w = S.items.get(id); if (!w || w.deleted) return history.back();
+  S.selW = id;
+  const info = [['원제', w.orig], ['나온 해', w.year], ['만든 사람', w.creator], ['출연·인물', w.cast], ['장르', w.genre], ['나라', w.country], ['분량', w.len]].filter(x => x[1]);
+  const sec = (t, v) => v ? `<h3>${t}</h3><p class="wtxt">${esc(v)}</p>` : '';
+  sheet(`<div class="grab"></div><div class="whead">${poster(w, 'pst big')}<div><div class="chips" style="margin-top:0"><span class="chip">${esc(w.type || '기타')}</span><span class="chip need">${WST[w.st] || ''}</span></div>
+<p class="ttl" style="margin-top:8px">${esc(w.title)}</p>${stars(w.rate, id)}
+<div class="wst">${Object.entries(WST).map(([k, l]) => `<button data-wst="${k}" class="${w.st === k ? 'on' : ''}">${l}</button>`).join('')}</div></div></div>
+<div class="line"><label class="f">어디까지<input id="w_prog" value="${esc(w.prog || '')}" placeholder="시즌2 5화, 120쪽" data-wfield="prog"></label><label class="f">시작<input id="w_start" type="date" value="${w.start || ''}" data-wfield="start"></label><label class="f">끝<input id="w_end" type="date" value="${w.end || ''}" data-wfield="end"></label></div>
+<section class="evalbox"><div class="hd"><h3>느낀 거 ${(w.notes || []).length}</h3></div>
+${(w.notes || []).slice().reverse().map((n, i) => `<div class="wnote"><p>${esc(n.text)}</p><span class="meta"><span>${fmtDay(n.at)}${n.prog ? ' · ' + esc(n.prog) : ''}</span>${n.nid && node(n.nid) ? `<button class="lnk" data-node="${n.nid}">생각 지도에서 보기</button>` : `<button class="lnk" data-wthink="${(w.notes.length - 1 - i)}">생각 지도에도 넣기</button>`}</span></div>`).join('')}
+<textarea class="in" id="w_note" rows="3" placeholder="지금 느낀 것, 떠오른 생각, 좋았던 장면"></textarea><div class="btns" style="margin-top:8px"><button class="btn pri" data-act="wNote">남기기</button></div></section>
+${w.aiAt ? '' : `<div class="btns"><button class="btn pri" data-act="wAI">AI로 작품 정보·히스토리·배경·파생 채우기</button></div>`}
+${info.length ? `<h3>작품 정보</h3><div class="winfo">${info.map(([k, v]) => `<span>${k}</span><b>${esc(v)}</b>`).join('')}</div>` : ''}
+${sec('줄거리', w.syn)}${sec('히스토리 · 만들어진 과정', w.hist)}${sec('배경 · 시대와 세계', w.bg)}
+${(w.der || []).length ? `<h3>파생 · 이어진 작품</h3>${w.der.map(d => `<div class="lk"><span style="flex:1"><b>${esc(d.t)}</b><small>${esc(d.rel || '')}</small></span><button class="chip" data-wwant="${esc(d.t)}">볼 것에 넣기</button></div>`).join('')}` : ''}
+${(w.sim || []).length ? `<h3>비슷한 작품</h3><div class="chips">${w.sim.map(t => `<button class="chip" data-wwant="${esc(t)}">${esc(t)} +</button>`).join('')}</div>` : ''}
+${w.aiAt ? `<p class="dim small" style="margin-top:14px">${esc(w.aiBy || 'AI')}가 ${fmtDay(w.aiAt)}에 채운 정보입니다. 틀린 곳이 있을 수 있습니다.${w.wiki ? ` <a href="${esc(w.wiki)}" target="_blank" rel="noopener">위키백과에서 확인</a>` : ''}</p>` : ''}
+<h3>이 작품 다루기</h3><div class="btns" style="margin-top:0">${w.aiAt ? '<button class="btn" data-act="wAI">AI로 다시 채우기</button>' : ''}<button class="btn" data-act="wEdit">고치기</button><button class="btn" data-act="wImg">포스터·그림 찾기</button><button class="btn red" data-act="wDel">지우기</button></div>`);
+}
+const editWork = id => show('wedit', () => {
+  const w = S.items.get(id), F = [['title', '제목'], ['orig', '원제'], ['year', '나온 해'], ['creator', '만든 사람'], ['cast', '출연·인물'], ['genre', '장르'], ['country', '나라'], ['len', '분량']];
+  sheet(`<div class="grab"></div><h2>작품 고치기</h2><label class="f">종류<select id="we_type">${WTYPES.map(t => `<option ${t === w.type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+${F.map(([k, l]) => `<label class="f">${l}<input id="we_${k}" value="${esc(w[k] || '')}"></label>`).join('')}
+${[['syn', '줄거리'], ['hist', '히스토리 · 만들어진 과정'], ['bg', '배경 · 시대와 세계']].map(([k, l]) => `<label class="f">${l}<textarea id="we_${k}">${esc(w[k] || '')}</textarea></label>`).join('')}
+<label class="f">파생 · 이어진 작품 (한 줄에 하나, "작품 - 관계")<textarea id="we_der">${esc((w.der || []).map(d => d.t + (d.rel ? ' - ' + d.rel : '')).join('\n'))}</textarea></label>
+<div class="btns"><button class="btn pri" data-act="wSave">저장</button><button class="btn" data-act="back">그만두기</button></div>`);
+});
+async function wikiImg(q) {
+  for (const lang of ['ko', 'en']) {
+    try {
+      const j = await (await fetch(`https://${lang}.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1&prop=pageimages|info&inprop=url&piprop=thumbnail&pithumbsize=500&pilicense=any&titles=${encodeURIComponent(q)}`)).json();
+      const p = Object.values(j.query?.pages || {})[0];
+      if (p && !p.missing && p.thumbnail) return { img: p.thumbnail.source, wiki: p.fullurl };
+      if (p && !p.missing && p.fullurl) return { wiki: p.fullurl };
+    } catch { /* 다음 언어 */ }
+  }
+  return {};
+}
+async function workAI(id) {
+  const w = S.items.get(id); if (!w) return;
+  const r = await busy('작품 정보를 찾는 중입니다', () => gemT('work', `아래 작품에 대해 아는 것을 JSON 하나로만 답하라. 한국어. 확실하지 않은 칸은 빈 문자열로 두고 지어내지 말 것.
+형식: {"title":"한국어 정식 제목","orig":"원제","type":"${WTYPES.join('|')} 중 하나","year":"나온 해","creator":"감독·작가·원작자","cast":"주요 출연·인물 3~5명","genre":"장르","country":"나라","len":"러닝타임·회차·쪽수",
+"syn":"줄거리 3~4문장(결말 누설 없이)","hist":"히스토리: 기획·제작·출간 과정, 흥행·반응, 상과 논란 등 3~5문장","bg":"배경: 시대·장소·세계관·바탕이 된 실제 사건이나 사상 3~4문장",
+"der":[{"t":"원작·속편·프리퀄·스핀오프·리메이크·각색 작품 제목","rel":"관계(예: 원작 소설, 시즌2, 2013 리메이크)"}],"sim":["비슷한 결의 작품 3~5개"],"wiki":"위키백과 문서 제목(원제 또는 영어 제목)"}
+
+[작품] ${w.title}${w.type && w.type !== '기타' ? ' (' + w.type + ')' : ''}${w.year ? ' ' + w.year : ''}`), 'work:' + id);
+  if (!r) return;
+  const pick = k => typeof r[k] === 'string' ? r[k].trim() : '';
+  for (const k of ['orig', 'year', 'creator', 'cast', 'genre', 'country', 'len', 'syn', 'hist', 'bg']) if (pick(k)) w[k] = pick(k);
+  if (WTYPES.includes(r.type) && (!w.type || w.type === '기타')) w.type = r.type;
+  if (Array.isArray(r.der)) w.der = r.der.filter(d => d && d.t).slice(0, 10).map(d => ({ t: String(d.t), rel: String(d.rel || '') }));
+  if (Array.isArray(r.sim)) w.sim = r.sim.map(String).slice(0, 6);
+  w.aiAt = Date.now(); w.aiBy = r._by;
+  if (!w.img || !w.wiki) { const x = await wikiImg(pick('wiki') || w.orig || w.title); if (!w.img && x.img) w.img = x.img; if (x.wiki) w.wiki = x.wiki; }
+  put(w, true); refreshW(id);
+  done(`${r._by}가 '${w.title}' 정보를 채웠습니다`, () => openWork(id));
+}
+const refreshW = id => { if (SH.length && SH[SH.length - 1].key === 'work:' + id) SH[SH.length - 1](); else render(); };
+const openWImg = id => show('img', () => {
+  const w = S.items.get(id);
+  sheet(`<div class="grab"></div><h2>포스터·그림 찾기</h2><p class="dim">위키백과 대표 그림을 먼저 찾고, 없으면 위키미디어 공용에서 찾습니다.</p>
+<form id="imgF" class="line" style="margin-top:12px"><input class="in" id="imgQ" value="${esc(w.orig || w.title)}" style="flex:1;margin:0"><button class="btn pri">찾기</button></form><div class="grid" id="imgR"></div>
+<div class="btns"><label class="btn">내 사진 올리기<input type="file" accept="image/*" id="wPhoto" hidden></label></div>`);
+  const run = async () => {
+    $('#imgR').innerHTML = '<p class="empty">찾는 중입니다.</p>';
+    const q = $('#imgQ').value.trim(), x = await wikiImg(q); let r = [];
+    try { r = await commons(q, 12); } catch { /* 없음 */ }
+    const all_ = [...(x.img ? [{ th: x.img, page: x.wiki }] : []), ...r];
+    if ($('#imgR')) $('#imgR').innerHTML = all_.map(i => `<button data-wimg="${esc(i.th)}"><img src="${esc(i.th)}" alt="" loading="lazy" referrerpolicy="no-referrer"></button>`).join('') || '<p class="empty">찾은 그림이 없습니다. 원제나 영어 제목으로 찾아 보세요.</p>';
+  };
+  $('#imgF').onsubmit = e => { e.preventDefault(); run(); }; run();
+});
+function workPhoto(id, file) {
+  const img = new Image(), url = URL.createObjectURL(file);
+  img.onload = () => { const k = Math.min(1, 500 / Math.max(img.width, img.height)), c = document.createElement('canvas'); c.width = img.width * k; c.height = img.height * k; c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); const w = S.items.get(id); w.img = c.toDataURL('image/jpeg', 0.75); put(w, true); URL.revokeObjectURL(url); history.back(); };
+  img.src = url;
+}
+
 // ── 구글 캘린더 (시간 블록을 올리고, 캘린더의 다른 일정을 시간표에 함께 보여 줌) ──
 const GCAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 const GC = { ev: new Map(), loading: new Set(), state: ls.get('tfm:gcal') ? 'on' : 'off' };
@@ -1122,6 +1246,10 @@ async function reloadAll() {
 
 window.ACT = {
   refresh: reloadAll,
+  wNote: () => { const v = $('#w_note').value.trim(); if (!v) return toast('느낀 것을 먼저 적어 주세요'); const w = S.items.get(S.selW); (w.notes ||= []).push({ at: Date.now(), text: v, prog: w.prog || '' }); put(w, true); bump(true); render(); drawWork(w.id); toast('남겼습니다'); },
+  wAI: () => workAI(S.selW), wEdit: () => editWork(S.selW), wImg: () => openWImg(S.selW),
+  wSave: () => { const w = S.items.get(S.selW), v = k => $('#we_' + k).value.trim(); for (const k of ['title', 'orig', 'year', 'creator', 'cast', 'genre', 'country', 'len', 'syn', 'hist', 'bg']) w[k] = v(k); w.title ||= '제목 없음'; w.type = v('type'); w.der = v('der').split('\n').map(x => x.trim()).filter(Boolean).map(x => { const [t, ...r] = x.split(' - '); return { t: t.trim(), rel: r.join(' - ').trim() }; }); put(w, true); render(); toast('저장했습니다'); history.back(); },
+  wDel: () => { if (!confirm('이 작품을 지울까요?')) return; const w = S.items.get(S.selW); w.deleted = true; put(w, true); render(); toast('작품을 지웠습니다'); history.back(); },
   mapFull: () => { S.mapFull = true; render(); }, mapPhone: () => { S.mapFull = false; render(); },
   theme: () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; ls.set('tfm:theme', t); },
   close: closeAll, back: () => history.back(), search: () => openSearch(), settings: openSettings, lock: toggleLock, mantra: openMantra,
@@ -1166,10 +1294,17 @@ window.ACT = {
   export: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify([...S.items.values()], null, 1)], { type: 'application/json' })); a.download = `thinkingForMe-${ymd()}.json`; a.click(); },
 };
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-mk],[data-mto],[data-tdone],[data-bdone],[data-tk],[data-bk],[data-tsched],[data-top],[data-picktop],[data-tcat],[data-tday],[data-tmode],[data-calm],[data-cald],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
+  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-wk],[data-wmode],[data-wst],[data-wrate],[data-wthink],[data-wwant],[data-wimg],[data-mk],[data-mto],[data-tdone],[data-bdone],[data-tk],[data-bk],[data-tsched],[data-top],[data-picktop],[data-tcat],[data-tday],[data-tmode],[data-calm],[data-cald],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
   if (B.drag > 8 && t.closest('#bd')) return;   // 보드를 끌다가 손을 뗀 것은 누른 것으로 치지 않음
   const d = t.dataset;
   if (d.act) return window.ACT[d.act]?.(t);
+  if (d.wk) return openWork(d.wk);
+  if (d.wmode) { S.wmode = d.wmode; return render(); }
+  if (d.wst) { const w = S.items.get(S.selW); w.st = d.wst; if (d.wst === 'done' && !w.end) w.end = ymd(); if (d.wst === 'doing' && !w.start) w.start = ymd(); put(w, true); render(); return drawWork(w.id); }
+  if (d.wrate) { const [id, r] = d.wrate.split(':'), w = S.items.get(id); w.rate = w.rate === +r ? 0 : +r; put(w, true); render(); return drawWork(id); }
+  if (d.wthink) { const w = S.items.get(S.selW), nt = w.notes[+d.wthink], n = put({ id: newId(), kind: 'node', t: nt.text.slice(0, 140), w: w.title.slice(0, 8), s: `${w.title}을 ${w.type === '책' ? '읽고' : '보고'}`, raw: nt.text, c: '작품·취향', g: w.title.slice(0, 30), k: '의견', at: nt.at, n: 1, st: 0, src: 'work', ...(w.img ? { img: w.img } : {}) }, true); nt.nid = n.id; put(w, true); toast('생각 지도의 작품·취향 가지에 넣었습니다'); return drawWork(w.id); }
+  if (d.wwant) { if (works().some(w => w.title.replace(/\s/g, '') === d.wwant.replace(/\s/g, ''))) return toast('이미 목록에 있습니다'); put({ id: 'w' + id32(), kind: 'work', title: d.wwant, type: '기타', st: 'want', notes: [], at: Date.now() }, true); render(); return toast(`'${d.wwant}'을 볼 것에 넣었습니다`); }
+  if (d.wimg) { const w = S.items.get(S.selW); w.img = d.wimg; put(w, true); render(); return history.back(); }
   if (d.mk) { (S.mpath ||= []).push(d.mk); NAV.push('lvl'); stamp(); render(); $('#main').scrollTop = 0; return; }
   if (d.mto != null) return orbitTo(+d.mto);
   if (d.tdone) { const t = S.items.get(d.tdone); return t && setDone(t, t.st !== 'done'); }
@@ -1205,9 +1340,11 @@ document.addEventListener('change', e => {
   const t = e.target;
   if (t.dataset.noti != null) notiChange(a => { const n = a[+t.dataset.noti]; n[t.dataset.k] = t.dataset.k === 'on' ? t.checked : t.dataset.k === 'time' ? round5(t.value || '09:00') : t.value; });
   if (t.id === 'photoIn' && t.files[0]) addPhoto(S.sel, t.files[0]);
+  if (t.id === 'wPhoto' && t.files[0]) workPhoto(S.selW, t.files[0]);
+  if (t.dataset.wfield) { const w = S.items.get(S.selW); w[t.dataset.wfield] = t.value.trim(); put(w, true); render(); }
 });
 document.addEventListener('error', e => { const t = e.target; if (t.tagName === 'IMG' && t.classList.contains('th')) { t.removeAttribute('src'); t.style.visibility = 'hidden'; } }, true);
-$('#quick').addEventListener('submit', e => { e.preventDefault(); const i = $('#quickIn'), m = S.qm || 'think'; m === 'think' ? addThought(i.value) : addTodo(i.value, m === 'urgent'); i.value = ''; });
+$('#quick').addEventListener('submit', e => { e.preventDefault(); const i = $('#quickIn'), m = S.qm || 'think'; m === 'think' ? addThought(i.value) : m === 'work' ? addWork(i.value) : addTodo(i.value, m === 'urgent'); i.value = ''; });
 addEventListener('hashchange', () => { const v = location.hash.slice(1); if (['review', 'todo'].includes(v)) { history.replaceState(history.state, '', location.pathname); go(v); } });
 addEventListener('online', flush);
 addEventListener('resize', () => { if ($('#bd')) applyT(); });
