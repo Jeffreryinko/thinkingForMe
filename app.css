@@ -163,13 +163,13 @@ svg{display:block}
 .days{display:flex;gap:4px;margin-top:10px}.days button{width:34px;height:34px;border-radius:10px;background:var(--fill);font-size:13px;font-weight:600;text-align:center}.days button.on{background:var(--blue);color:#fff}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}
 .grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;display:block}
-#gate{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;gap:18px;padding:32px;max-width:520px;margin:0 auto}
-#gate h1{margin:0;font-size:34px;font-weight:800;letter-spacing:-.04em}#gate p{color:var(--dim);margin:0}
-#toasts{position:fixed;left:0;right:0;bottom:calc(118px + var(--sab));display:flex;flex-direction:column;align-items:center;gap:8px;z-index:30;pointer-events:none}
+#gate{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;gap:16px;padding:32px;max-width:480px;margin:0 auto}
+#gate h1{margin:0;font-size:30px;font-weight:700;letter-spacing:-.04em}#gate p{color:var(--sub);margin:0}
+#toasts{position:fixed;left:0;right:0;bottom:calc(140px + var(--sab));display:flex;flex-direction:column;align-items:center;gap:8px;z-index:30;pointer-events:none}
 .toast{pointer-events:auto;padding:13px 18px;border-radius:16px;background:#333D4B;color:#fff;font-size:15px;max-width:92vw;box-shadow:0 8px 24px rgba(0,0,0,.25)}
-.toast button{margin-left:12px;color:var(--hl);font-weight:700}
-@media (min-width:700px){.brand{display:inline}.depth{max-width:340px}.bar{gap:10px}#main:not(.board){padding:36px max(28px,calc(50vw - 430px)) 60px}.pgrid{grid-template-columns:repeat(4,1fr)}.tabs{justify-content:center}.tabs button{flex:0 0 110px}}
-@media (prefers-reduced-motion:no-preference){.sheet-box{animation:up .18s ease-out}@keyframes up{from{transform:translateY(24px);opacity:.6}}}
+.toast button{margin-left:12px;color:#7AB3FF;font-weight:700}
+@media (min-width:760px){.bar{padding-left:24px}.card{padding:26px 24px}.pgrid{grid-template-columns:repeat(4,1fr)}}
+@media (prefers-reduced-motion:no-preference){.sheet-box{animation:up .22s cubic-bezier(.2,.8,.2,1)}@keyframes up{from{transform:translateY(40px);opacity:.5}}}
 
 /* 띄어쓰기(줄바꿈): 낱말 단위로 끊되 아주 긴 주소·영문은 넘치지 않게, 문단 끝 외톨이 글자 방지, 제목은 고르게 */
 html,body{overflow-wrap:break-word}
