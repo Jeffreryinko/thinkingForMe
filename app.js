@@ -670,7 +670,11 @@ document.addEventListener('click', e => {
   if (d.mantra) return setMantra(d.mantra);
   if (d.img) { const n = node(S.sel); n.img = d.img; n.imgSrc = d.src; n.kw = $('#imgQ').value.trim(); delete n.th; put(n, true); B.relKey = ''; return history.back(); }
   if (d.day) { const [i, j] = d.day.split(':').map(Number); return notiChange(a => { const ds = new Set(a[i].days || []); ds.has(j) ? ds.delete(j) : ds.add(j); a[i].days = [...ds].sort(); }); }
-  if (d.tog) { const k = d.tog; if (isOpen(k, +d.lvl)) { S.open.add('!' + k); S.open.delete(k); } else { S.open.add(k); S.open.delete('!' + k); } ls.set('tfm:open', JSON.stringify([...S.open])); render(); }
+  if (d.tog) { const k = d.tog; if (isOpen(k, +d.lvl)) { S.open.add('!' + k); S.open.delete(k); } else { S.open.add(k); S.open.delete('!' + k); } ls.set('tfm:open', JSON.stringify([...S.open]));
+    const was = B.items.find(i => i.tog === k); render();
+    const now = B.items.find(i => i.tog === k);   // 누른 가지가 화면에서 제자리에 있도록 판을 맞춰 옮김
+    if (was && now) { B.tx += (was.x - now.x) * B.k; B.ty += (was.y - now.y) * B.k; applyT(); }
+  }
 });
 document.addEventListener('change', e => {
   const t = e.target;
