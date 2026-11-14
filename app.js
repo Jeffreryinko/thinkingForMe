@@ -269,6 +269,7 @@ function viewHome() {
   return `<section class="hello"><p class="date">${now.getMonth() + 1}월 ${now.getDate()}일 ${'일월화수목금토'[now.getDay()]}요일</p>
 <h1 class="mantra"><span>${esc(s.mantra || '오늘 되뇔 한 문장을 골라 보세요')}</span></h1>
 <p class="by">${src ? `${fmtDay(src.at)}에 내가 한 말` : '내가 고른 문장'}<button class="lnk" data-act="mantra">바꾸기</button></p></section>
+${todoCard()}
 <section class="card"><div class="hd"><h2>오늘 ${used}번 열었어요</h2><span class="dim">${used >= 5 ? '오늘 목표를 채웠어요' : `5번까지 ${5 - used}번`}</span></div>
 <div class="prog"><i style="width:${Math.min(used / 5, 1) * 100}%"></i></div>
 <div class="kv"><div><b>${ns.length}</b><span>쌓인 생각</span></div><div><b>${ns.filter(n => moved(n, wk)).length}</b><span>이번 주</span></div><div><b>${st}일</b><span>연속</span></div><div><b>${links().length}</b><span>연결</span></div></div></section>
@@ -716,6 +717,46 @@ function addPhoto(id, file) {
   img.src = url;
 }
 
+// ── 오늘 할 일: 플래너와 같은 기록(planner_items)을 그대로 읽고 씁니다. 여기서 체크하면 플래너에서도 끝난 일이 됩니다 ──
+const P = { rows: new Map(), ok: false };
+const QM = { think: ['생각', '지금 떠오른 생각을 한 줄로'], todo: ['할 일', '오늘 할 일을 한 줄로'], urgent: ['119', '지금 급한 일을 한 줄로'] };
+async function plannerPull() {
+  let rows;
+  if (TEST) rows = TEST.planner || [];
+  else { if (!sb) return; const { data, error } = await sb.from('planner_items').select('id,kind,data,updated_at').in('kind', ['task', 'block', 'day']).eq('deleted', false).limit(3000); if (error) return console.warn(error); rows = data; }
+  P.rows = new Map(rows.map(r => [r.id, r])); P.ok = true;
+}
+async function plannerPut(id, kind, patch) {
+  const row = { id, kind, data: { ...(P.rows.get(id)?.data || {}), ...patch }, updated_at: Date.now() };
+  P.rows.set(id, row); P.ok = true; render();
+  if (sb) { const { error } = await sb.from('planner_items').upsert({ ...row, user_id: S.user.id, deleted: false, rev: 0 }, { onConflict: 'user_id,id' }); if (error) toast('플래너에 저장하지 못했습니다. 연결을 확인해 주세요.'); }
+}
+function todoCard() {
+  if (!P.ok) return '';
+  const d = ymd(), rows = [...P.rows.values()], tasks = rows.filter(r => r.kind === 'task'), open = t => (t.data.st || 'open') === 'open';
+  const top = new Set(rows.find(r => r.kind === 'day' && r.data.date === d)?.data.top || []);
+  const blocks = rows.filter(r => r.kind === 'block' && r.data.date === d && !r.data.routine).sort((a, b) => String(a.data.start) < String(b.data.start) ? -1 : 1);
+  const timeOf = new Map(blocks.filter(b => b.data.taskId).map(b => [b.data.taskId, `${b.data.start}~${b.data.end || ''}`]));
+  const doneToday = t => t.data.st === 'done' && t.data.doneAt && ymd(new Date(t.data.doneAt)) === d;
+  const rank = t => t.data.cat === 1 ? 0 : top.has(t.id) ? 1 : timeOf.has(t.id) ? 2 : t.data.due && t.data.due <= d ? 3 : 9;
+  const list = tasks.filter(t => (open(t) && rank(t) < 9) || doneToday(t)).sort((a, b) => open(b) - open(a) || rank(a) - rank(b) || String(timeOf.get(a.id) || 'z') .localeCompare(String(timeOf.get(b.id) || 'z')));
+  const free = blocks.filter(b => !b.data.taskId);
+  const left = list.filter(open).length + free.filter(b => !b.data.done).length, more = tasks.filter(t => open(t) && rank(t) === 9).length, wait = tasks.filter(t => t.data.st === 'wait').length;
+  const row = (id, kind, done, title, meta) => `<div class="todo${done ? ' done' : ''}"><button class="ck${done ? ' on' : ''}" data-pdone="${id}" data-kind="${kind}" aria-label="${done ? '끝낸 일 되돌리기' : '끝냄으로 표시'}">${done ? '✓' : ''}</button><span class="rb"><b>${esc(title)}</b>${meta ? `<span class="meta">${meta}</span>` : ''}</span></div>`;
+  return `<section class="card"><div class="hd"><h2>오늘 할 일 ${left ? left + '개' : ''}</h2><a class="lnk" href="${CFG.planner}">플래너 열기</a></div>
+${list.map(t => { const x = t.data, m = [x.cat === 1 ? '<span class="chip urgent">119 긴급</span>' : '', top.has(t.id) ? '<mark>핵심</mark>' : '', timeOf.has(t.id) ? `<span>${timeOf.get(t.id)}</span>` : '', x.due && x.due < d && open(t) ? `<span style="color:var(--red)">${fmtDay(new Date(x.due).getTime())}까지였음</span>` : '', x.who ? `<span>${esc(x.who)}</span>` : '', S.depth >= 3 && x.note ? `<span>${esc(x.note)}</span>` : ''].join(''); return row(t.id, 'task', !open(t), x.title, m); }).join('')}
+${free.map(b => row(b.id, 'block', !!b.data.done, b.data.title, `<span>${b.data.start}~${b.data.end || ''}</span>`)).join('')}
+${list.length + free.length ? '' : '<p class="dim">오늘 잡힌 일이 없습니다. 아래 입력칸 왼쪽 단추를 \'할 일\'이나 \'119\'로 바꿔 적으면 여기에 들어옵니다.</p>'}
+${more || wait ? `<p class="dim small" style="margin-top:10px">${[more ? `날짜 없는 할 일 ${more}개` : '', wait ? `답을 기다리는 일 ${wait}개` : ''].filter(Boolean).join(', ')}는 플래너에 있습니다.</p>` : ''}</section>`;
+}
+function addTodo(text, urgent) {
+  text = text.trim(); if (!text) return;
+  bump(true);
+  plannerPut(newId() + newId().slice(0, 4), 'task', { title: text.slice(0, 300), cat: urgent ? 1 : 0, tags: [], who: '', due: ymd(), note: '', st: 'open', at: Date.now(), doneAt: null });
+  toast(urgent ? '119 긴급한 일로 넣었습니다' : '오늘 할 일로 넣었습니다');
+  if (S.view !== 'home') go('home');
+}
+
 // ── 자판기와 잇기 ─────────────────────────────────────────────────────
 // 자판기에서 남긴 생각·질문·메모·별표·좋아요를 생각으로 가져옵니다 (읽기만 함, 자판기 기록은 그대로).
 // 같은 주소(jeffreryinko.github.io)라 이 기기의 자판기 기록을 바로 읽고, 다른 기기 것은 자판기가 올려 둔 서버 칸(kv)에서 읽습니다.
@@ -773,6 +814,7 @@ const ACT = {
   linkType: el => { const l = S.items.get(el.dataset.id); l.r = l.r === 'contra' ? 'rel' : 'contra'; l.by = 'me'; put(l, true);  openNode(S.sel); },
   linkDel: el => { const l = S.items.get(el.dataset.id); l.deleted = true; put(l, true);  openNode(S.sel); },
   fit: () => fitBoard(true, true), zin: () => zoomAt(1.3), zout: () => zoomAt(1 / 1.3),
+  qmode: () => { const ks = Object.keys(QM); S.qm = ks[(ks.indexOf(S.qm || 'think') + 1) % ks.length]; const b = $('#qMode'); b.textContent = QM[S.qm][0]; b.className = S.qm; $('#quickIn').placeholder = QM[S.qm][1]; $('#quickIn').focus(); },
   another: () => { S.rs = (S.rs || 0) + 1; render(); },
   chainGo: () => { S.flow = 'chain'; S.chain = S.sel; S.after = () => S.view === 'time' ? render() : go('time'); closeAll(); },
   install: async () => { if (!IP) return; IP.prompt(); await IP.userChoice; IP = null; history.back(); },
@@ -786,10 +828,11 @@ const ACT = {
   export: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify([...S.items.values()], null, 1)], { type: 'application/json' })); a.download = `thinkingForMe-${ymd()}.json`; a.click(); },
 };
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
+  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-pdone],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
   if (B.drag > 8 && t.closest('#bd')) return;   // 보드를 끌다가 손을 뗀 것은 누른 것으로 치지 않음
   const d = t.dataset;
   if (d.act) return ACT[d.act]?.(t);
+  if (d.pdone) { const r = P.rows.get(d.pdone); if (!r) return; if (d.kind === 'block') return plannerPut(r.id, 'block', { done: !r.data.done }); const done = r.data.st === 'done'; return plannerPut(r.id, 'task', { st: done ? 'open' : 'done', doneAt: done ? null : Date.now() }); }
   if (d.go) return go(d.go);
   if (d.depth) { S.depth = +d.depth; ls.set('tfm:depth', S.depth); S.open.clear(); ls.set('tfm:open', '[]'); return render(); }
   if (d.flow) { S.flow = d.flow; ls.set('tfm:flow', d.flow); return render(); }
@@ -813,7 +856,7 @@ document.addEventListener('change', e => {
   if (t.id === 'photoIn' && t.files[0]) addPhoto(S.sel, t.files[0]);
 });
 document.addEventListener('error', e => { const t = e.target; if (t.tagName === 'IMG' && t.classList.contains('th')) { t.removeAttribute('src'); t.style.visibility = 'hidden'; } }, true);
-$('#quick').addEventListener('submit', e => { e.preventDefault(); const i = $('#quickIn'); addThought(i.value); i.value = ''; });
+$('#quick').addEventListener('submit', e => { e.preventDefault(); const i = $('#quickIn'), m = S.qm || 'think'; m === 'think' ? addThought(i.value) : addTodo(i.value, m === 'urgent'); i.value = ''; });
 addEventListener('hashchange', () => { if (location.hash === '#review') { history.replaceState(history.state, '', location.pathname); go('review'); } });
 addEventListener('online', flush);
 addEventListener('resize', () => { if ($('#bd')) applyT(); });
@@ -833,8 +876,9 @@ async function start(user) {
   render();
   try { await pull(); } catch (e) { console.warn(e); toast('서버에서 불러오지 못했습니다. 이 기기에 저장해 둔 것을 보여 드립니다.'); }
   opened(); render(); flush();
+  plannerPull().then(render);
   vfmImport();
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && opened()) pull().then(render).then(() => vfmImport()).catch(() => {}); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && opened()) Promise.all([pull(), plannerPull()]).then(render).then(() => vfmImport()).catch(() => {}); });
 }
 async function boot() {
   if ('serviceWorker' in navigator && !TEST) navigator.serviceWorker.register('sw.js').catch(() => {});
