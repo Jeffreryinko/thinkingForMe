@@ -1065,7 +1065,30 @@ let IP = null;   // 브라우저가 주는 '앱 설치' 기회
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); IP = e; });
 
 // ── 누르기 ───────────────────────────────────────────────────────────
+// 새로고침: 서버의 최신 기록·자판기·구글 일정을 다시 받고, 사이트가 새로 바뀌었으면 화면을 새로 엶
+let rfBusy = false;
+async function refresh() {
+  if (rfBusy) return; rfBusy = true; $('#rfBtn')?.classList.add('spin');
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration().catch(() => null);
+    await reg?.update().catch(() => {});
+    if (reg?.installing || reg?.waiting) { location.reload(); return; }
+    await pull(); GC.ev.clear(); GC.loading.clear(); render(); flush(); await vfmImport();
+    toast('새로 불러왔습니다', null, null, 2000);
+  } catch (e) { console.warn(e); toast('새로 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.'); }
+  finally { rfBusy = false; $('#rfBtn')?.classList.remove('spin'); }
+}
+// 목록 맨 위에서 아래로 당기면 새로고침
+(() => {
+  let y0 = null, dy = 0;
+  const m = () => $('#main');
+  addEventListener('touchstart', e => { y0 = m() && !m().classList.contains('board') && m().scrollTop <= 0 && $('#sheet').hidden && m().contains(e.target) ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
+  addEventListener('touchmove', e => { if (y0 == null) return; dy = e.touches[0].clientY - y0; m().style.transform = dy > 0 ? `translateY(${Math.min(dy, 120) / 2}px)` : ''; }, { passive: true });
+  addEventListener('touchend', () => { if (y0 == null) return; m().style.transform = ''; if (dy > 90) refresh(); y0 = null; });
+})();
+
 window.ACT = {
+  refresh,
   theme: () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; ls.set('tfm:theme', t); },
   close: closeAll, back: () => history.back(), search: () => openSearch(), settings: openSettings, lock: toggleLock, mantra: openMantra,
   edit: () => editNode(S.sel), save: () => saveNode(S.sel), organize: () => organize(S.sel), persp: () => perspectives(S.sel),

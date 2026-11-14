@@ -212,3 +212,6 @@ h1,h2,h3{text-wrap:balance}
 .catp button{padding:8px 12px;border-radius:10px;background:var(--fill);font-size:14px;font-weight:600;color:var(--sub)}
 .catp button.on{background:var(--c);color:#fff}
 .ib{font-size:22px}
+
+#rfBtn.spin svg{animation:spin .8s linear infinite}
+#main{transition:transform .15s}
