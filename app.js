@@ -18,7 +18,7 @@ const STAGES = ['씨앗', '새싹', '나무'];
 const NEEDS = ['돈', '시간', '인정', '재미', '편리', '연결', '성장', '안정', '건강'];
 const NOTI = { mantra: '만트라', nudge: '한 줄 적기 알림', review: '주간 회고' };
 
-const S = { items: new Map(), user: null, depth: +(ls.get('tfm:depth') || 2), unlocked: false, view: 'home', open: new Set(JSON.parse(ls.get('tfm:open') || '[]')) };
+const S = { flow: ls.get('tfm:flow') || 'date', items: new Map(), user: null, depth: +(ls.get('tfm:depth') || 2), unlocked: false, view: 'home', open: new Set(JSON.parse(ls.get('tfm:open') || '[]')) };
 let sb = null, queue = new Set(JSON.parse(ls.get('tfm:q') || '[]'));
 
 // ── 자료 ─────────────────────────────────────────────────────────────
@@ -107,23 +107,65 @@ function addThought(text) {
 function create(text) {
   const url = (text.match(/https?:\/\/\S+/) || [])[0] || '', plain = text.replace(url, '').trim() || text;
   const n = put({ id: newId(), kind: 'node', t: plain.slice(0, 140), w: plain.split(/\s+/)[0].slice(0, 8), s: '', raw: text, c: '미분류', g: '새 생각', k: '생각', at: Date.now(), n: 1, st: 0, src: 'me', ...(url ? { url, ...(yt(url) ? { img: yt(url) } : {}) } : {}) });
-  B.relKey = '';
+  
   toast('생각을 적었습니다', settings().gkey ? 'AI로 정리' : '열어 보기', () => settings().gkey ? organize(n.id) : openNode(n.id));
 }
 
-// ── AI (Gemini) — 버튼을 누를 때만 부릅니다 ────────────────────────────
-async function gem(prompt) {
-  const s = settings();
-  if (!s.gkey) { toast('AI를 쓰려면 설정에 Gemini 키를 먼저 넣어 주세요', '설정 열기', openSettings); throw new Error('nokey'); }
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.gmodel || 'gemini-flash-latest')}:generateContent`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': s.gkey },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.4 } }),
-  });
-  if (!res.ok) throw new Error(res.status === 429 ? '무료 한도를 넘었습니다. 잠시 뒤 다시 눌러 주세요.' : `AI 오류 (${res.status})`);
-  const j = await res.json();
-  const txt = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
-  return JSON.parse(txt.replace(/^```json\s*|```\s*$/g, ''));
+// ── AI — 버튼을 누를 때만 부릅니다. Gemini(무료)·Grok·Claude를 일에 따라 나눠 쓰고, 유료 AI는 월 한도 안에서만 ──
+const PROV = {
+  gemini: { name: 'Gemini', key: 'gkey', model: 'gmodel', def: 'gemini-flash-latest', paid: false, pin: 0, pout: 0 },
+  grok: { name: 'Grok', key: 'xkey', model: 'xmodel', def: 'grok-4-fast', paid: true, pin: 0.2, pout: 0.5 },
+  claude: { name: 'Claude', key: 'ckey', model: 'cmodel', def: 'claude-sonnet-5-5', paid: true, pin: 3, pout: 15 },
+};
+// 일마다 먼저 부를 순서: 자주 하는 정리는 무료 Gemini, 깊게 따져야 하는 평가·회고는 Claude, 짧은 질문·만트라는 Grok
+const ROUTE = { organize: ['gemini', 'grok', 'claude'], judge: ['claude', 'grok', 'gemini'], weekly: ['claude', 'gemini', 'grok'], ask: ['grok', 'gemini', 'claude'], mantra: ['grok', 'gemini', 'claude'] };
+const month = () => ymd().slice(0, 7);
+const usd = v => '$' + (+v || 0).toFixed(2);
+const spendOf = () => settings().spend?.[month()] || {};
+const spent = () => (spendOf().claude || 0) + (spendOf().grok || 0);
+const cap = () => +(settings().cap ?? 20) || 20;
+function charge(p, inT, outT) {
+  const P = PROV[p]; if (!P.paid) return;
+  const s = settings(), m = ((s.spend ||= {})[month()] ||= {}), before = spent(), c = cap();
+  m[p] = (m[p] || 0) + ((inT || 0) * P.pin + (outT || 0) * P.pout) / 1e6;
+  put(s, true);
+  const now = spent();
+  if (before < c * 0.8 && now >= c * 0.8 && now < c) toast(`이번 달 유료 AI ${usd(now)}, 한도 ${usd(c)}의 80%입니다`);
+  if (before < c && now >= c) toast(`이번 달 한도 ${usd(c)}에 닿아 Claude·Grok은 멈추고 Gemini만 씁니다`);
 }
+const parseJ = t => { const s = String(t), a = s.indexOf('{'), b = s.lastIndexOf('}'); return JSON.parse(a >= 0 ? s.slice(a, b + 1) : s); };
+async function call(p, prompt) {
+  const P = PROV[p], s = settings(), key = s[P.key], model = s[P.model] || P.def;
+  let res;
+  try {
+    if (p === 'gemini') res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.4 } }) });
+    else if (p === 'claude') res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt + '\n\n다른 말 없이 JSON 하나만 출력하라.' }] }) });
+    else res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+      body: JSON.stringify({ model, temperature: 0.4, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: prompt }] }) });
+  } catch { throw new Error(`${P.name}에 연결하지 못했습니다`); }
+  if (!res.ok) throw new Error(res.status === 401 || res.status === 403 ? `${P.name} 키가 맞지 않습니다. 설정에서 확인해 주세요` : res.status === 429 ? `${P.name} 사용 한도를 넘었습니다. 잠시 뒤 다시 눌러 주세요` : res.status === 400 || res.status === 404 ? `${P.name} 모델 이름(${model})을 설정에서 확인해 주세요` : `${P.name}가 답하지 못했습니다 (${res.status})`);
+  const j = await res.json();
+  if (p === 'gemini') return { text: (j.candidates?.[0]?.content?.parts || []).map(x => x.text || '').join('') };
+  if (p === 'claude') return { text: (j.content || []).map(x => x.text || '').join(''), inT: j.usage?.input_tokens, outT: j.usage?.output_tokens };
+  return { text: j.choices?.[0]?.message?.content || '', inT: j.usage?.prompt_tokens, outT: j.usage?.completion_tokens };
+}
+async function gem(prompt, task = 'organize') {
+  const s = settings(), over = spent() >= cap();
+  const order = (ROUTE[task] || ROUTE.organize).filter(p => s[PROV[p].key] && !(PROV[p].paid && over));
+  if (!order.length) { toast('AI를 쓰려면 설정에 AI 키를 먼저 넣어 주세요', '설정 열기', openSettings); throw new Error('nokey'); }
+  let last;
+  for (const p of order) {
+    try { const r = await call(p, prompt); charge(p, r.inT, r.outT); const out = parseJ(r.text); out._by = PROV[p].name; return out; }
+    catch (e) { last = e; console.warn(p, e); }
+  }
+  throw last;
+}
+const gemT = (task, prompt) => gem(prompt, task);
 async function busy(label, fn) {
   const t = toast(label, null, null, 60000);
   try { return await fn(); } catch (e) { if (e.message !== 'nokey') toast(e.message || 'AI가 답하지 못했습니다. 다시 눌러 주세요.'); console.warn(e); }
@@ -134,7 +176,7 @@ const groupsText = () => [...new Set(all('node').map(n => `${n.c} > ${n.g}`))].j
 async function organize(id) {
   const n = node(id); if (!n) return;
   const cand = nearest(n.raw || n.t, 25, id).map(([, m]) => `${m.id}|${m.t}`).join('\n');
-  const r = await busy('AI가 정리하는 중입니다', () => gem(`너는 한 사람의 생각 노트를 정리하는 조수다. 아래 "새 생각"을 정리해 JSON 하나로만 답하라. 한국어. 사용자가 하지 않은 말을 지어내지 말 것.
+  const r = await busy('AI가 정리하는 중입니다', () => gemT('organize', `너는 한 사람의 생각 노트를 정리하는 조수다. 아래 "새 생각"을 정리해 JSON 하나로만 답하라. 한국어. 사용자가 하지 않은 말을 지어내지 말 것.
 형식: {"w":"핵심 단어 1개(6자 이내)","t":"한 줄(40자 이내)","s":"요약 1~2문장","d":"상세 3~5문장(생각의 배경·의미·열린 질문)","c":"대분류","g":"연결 주제","k":"생각|의견|구상|자료|기록 중 하나","needs":["${NEEDS.join('","')}" 중 이 생각이 건드리는 사람들의 욕구 0~3개],"next":"다음 한 걸음(구상일 때만, 20자 이내, 없으면 빈 문자열)","kw":"이 생각을 나타낼 사진 검색어(영어 1~2단어, 구체적인 사물이나 장면)","links":[{"id":"관련 생각 id","r":"rel 또는 contra(서로 부딪히면)","why":"한 줄 이유"}]}
 c와 g는 가능하면 아래 "기존 분류"에서 고르고, 정말 맞는 게 없을 때만 새로 만든다. links는 "후보"의 id만 쓰고 최대 4개.
 
@@ -154,18 +196,18 @@ ${cand}`));
   });
   for (const l of r.links || []) if (node(l.id) && l.id !== id) addLink(id, l.id, l.r === 'contra' ? 'contra' : 'rel', l.why, 'ai');
   if (!pic(n) && n.kw) try { const im = (await commons(n.kw, 3))[0]; if (im) { n.img = im.th; n.imgSrc = im.page; } } catch { /* 그림은 없어도 됨 */ }
-  B.relKey = ''; put(n); openNode(id);
+   put(n); openNode(id);
   toast('정리했습니다. 틀린 연결은 눌러서 고칠 수 있습니다.');
 }
 async function perspectives(id) {
   const n = node(id); if (!n) return;
-  const r = await busy('세 사람의 눈으로 보는 중입니다', () => gem(`아래 구상을 세 관점에서 냉정하게 평가해 JSON으로만 답하라. 한국어, 각 항목 1~2문장.
-형식: {"inv":"투자자가 볼 것(시장·수익·위험)","cus":"고객이 느낄 것(쓸 이유·안 쓸 이유)","com":"경쟁자가 볼 것(이미 있는 것·빈틈)","need":"이 구상이 건드리는 사람들의 욕구와 그 강도(추정임을 전제)","needs":["${NEEDS.join('","')}" 중 0~3개]}
+  const r = await busy('세 사람의 눈으로 보는 중입니다', () => gemT('judge', `아래 구상을 세 관점에서 냉정하게 평가해 JSON으로만 답하라. 한국어, 각 항목 1~2문장.
+형식: {"inv":"투자자가 볼 것(시장·수익·위험)","cus":"고객이 느낄 것(쓸 이유·안 쓸 이유)","com":"경쟁자가 볼 것(이미 있는 것·빈틈)","need":"이 생각이 건드리는 사람들의 욕구와 그 강도, 누가 얼마나 절실한지(추정임을 밝힐 것)","needs":["${NEEDS.join('","')}" 중 0~3개]}
 
 [구상] ${n.t}
 ${n.s || ''} ${n.d || ''}`));
   if (!r) return;
-  n.v = { inv: r.inv, cus: r.cus, com: r.com, need: r.need };
+  n.v = { inv: r.inv, cus: r.cus, com: r.com, need: r.need, by: r._by, at: Date.now() };
   if (r.needs?.length) n.needs = r.needs.filter(x => NEEDS.includes(x));
   put(n); openNode(id);
 }
@@ -180,23 +222,25 @@ function addLink(a, b, r = 'rel', why = '', by = 'me') {
 const linksOf = id => links().filter(l => l.a === id || l.b === id).map(l => ({ l, o: node(l.a === id ? l.b : l.a) }));
 
 // ── 화면 조각 ─────────────────────────────────────────────────────────
-// 대분류마다 포스트잇 색 한 쌍 [바탕, 글자]
-const PAL = [['#FFE9A8', '#5A4200'], ['#CFE4FF', '#0D3B73'], ['#D3F1D8', '#165A2B'], ['#FFD9D0', '#7C2414'], ['#E6DBFF', '#42248A'], ['#FFDDEE', '#7B1648'], ['#D4EEEA', '#0F4F48'], ['#E9E6DD', '#44403A']];
-const pal = c => PAL[hue(c) % PAL.length];
+const COL = ['#3182F6', '#F04452', '#00A97F', '#F59E0B', '#7C5CFA', '#E5508C', '#0CA5C1', '#6B7684'];
+const colOf = c => COL[hue(c) % COL.length];
+const pal = c => [`color-mix(in srgb,${colOf(c)} 15%,var(--card))`, colOf(c)];
 const fmtDay = t => { const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일`; };
+const ago = t => { const d = Math.floor((Date.now() - t) / DAY); return d <= 0 ? '오늘' : d === 1 ? '어제' : d < 30 ? `${d}일 전` : d < 365 ? `${Math.floor(d / 30)}달 전` : `${Math.floor(d / 365)}년 전`; };
 const pic = n => n.th || n.img || '';
-const thumb = n => pic(n)
-  ? `<img class="th" src="${esc(pic(n))}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-  : `<span class="th tile" style="background:${pal(n.c)[0]};color:${pal(n.c)[1]}">${esc((n.w || n.t).slice(0, 5))}</span>`;
-const views = v => `<div class="view3">${v.inv ? `<div><b>투자자의 눈</b>${esc(v.inv)}</div>` : ''}${v.cus ? `<div><b>고객의 눈</b>${esc(v.cus)}</div>` : ''}${v.com ? `<div><b>경쟁자의 눈</b>${esc(v.com)}</div>` : ''}${v.need ? `<div><b>사람들의 욕구 (AI 추정)</b>${esc(v.need)}</div>` : ''}</div>`;
-function body(n, d = S.depth) {
+const thumb = (n, cls = 'th') => pic(n)
+  ? `<img class="${cls}" src="${esc(pic(n))}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+  : `<span class="${cls} tile" style="background:${pal(n.c)[0]};color:${pal(n.c)[1]}">${esc((n.w || n.t).slice(0, 5))}</span>`;
+const EV = [['inv', '투자자의 눈'], ['cus', '고객의 눈'], ['com', '경쟁자의 눈'], ['need', '사람들의 욕구']];
+const views = v => `<div class="eval">${EV.filter(([k]) => v[k]).map(([k, l]) => `<div><b>${l}</b><p>${esc(v[k])}</p></div>`).join('')}</div>`;
+function body(n, d = S.depth, noV) {
   if (d <= 1) return `<b class="w">${esc(n.w || n.t.split(' ')[0])}</b>`;
   let o = `<b>${esc(n.t)}</b>`;
   if (d >= 3 && n.s) o += `<p>${esc(n.s)}</p>`;
   if (d >= 4) {
     if (n.d) o += `<p>${esc(n.d)}</p>`;
     if ((n.needs || []).length || n.next) o += `<div class="chips">${(n.needs || []).map(x => `<span class="chip need">${esc(x)}</span>`).join('')}${n.next ? `<span class="chip">다음 걸음: ${esc(n.next)}</span>` : ''}</div>`;
-    if (n.v) o += views(n.v);
+    if (n.v && !noV) o += `<div style="margin-top:10px">${views(n.v)}</div>`;
   }
   if (d >= 5) {
     if (n.raw && n.raw !== n.s) o += `<p class="raw">“${esc(n.raw)}”</p>`;
@@ -204,33 +248,84 @@ function body(n, d = S.depth) {
   }
   return o;
 }
-const card = (n, d = S.depth) => `<button class="item" data-node="${n.id}">${thumb(n)}<span class="rb">${body(n, d)}<span class="meta"><span>${esc(n.k)}</span><span>${esc(n.c)}</span><span>${fmtDay(n.at)}</span>${n.p ? '<span>잠금 영역</span>' : ''}${(n.n || 1) > 1 ? `<mark>${n.n}번 떠올림</mark>` : ''}</span></span></button>`;
+const card = (n, d = S.depth) => `<button class="item" data-node="${n.id}">${thumb(n)}<span class="rb">${body(n, d)}<span class="meta"><span>${esc(n.g)}</span><span>${ago(n.at)}</span>${n.p ? '<span>잠금</span>' : ''}${(n.n || 1) > 1 ? `<mark>${n.n}번 떠올림</mark>` : ''}${n.v ? '<mark>평가 있음</mark>' : ''}</span></span></button>`;
 const byNew = (a, b) => (b.at || 0) - (a.at || 0);
 const moved = (n, since) => n.at > since || (n.last || 0) > since;
 
+// 오늘 다시 꺼내 볼 생각: 2주 넘게 지난 내 생각 중에서 날마다 하나 (다른 생각을 누르면 바뀜)
+function oldOne() {
+  const ns = nodes(), mine = ns.filter(n => n.k !== '자료'), base = mine.length ? mine : ns;
+  const old = base.filter(n => Date.now() - n.at > 14 * DAY), pool = (old.length ? old : base).sort((a, b) => a.id < b.id ? -1 : 1);
+  if (!pool.length) return null;
+  const seed = [...ymd()].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 1e9, 7) + (S.rs || 0) * 7919;
+  return pool[seed % pool.length];
+}
 function viewHome() {
-  const ns = nodes(), s = settings(), used = useOf(ymd()), wk = Date.now() - 7 * DAY, st = streak();
-  const src = s.mantraFrom && node(s.mantraFrom), now = new Date();
-  const ideas = ns.filter(n => n.k === '구상').sort((a, b) => (b.st || 0) - (a.st || 0) || byNew(a, b)).slice(0, 7);
-  const rep = ns.filter(n => (n.n || 1) > 1).sort((a, b) => b.n - a.n).slice(0, 5);
+  const ns = nodes(), s = settings(), used = useOf(ymd()), wk = Date.now() - 7 * DAY, st = streak(), now = new Date();
+  const src = s.mantraFrom && node(s.mantraFrom), o = oldOne();
+  const ideas = ns.filter(n => n.k === '구상').sort((a, b) => (b.st || 0) - (a.st || 0) || byNew(a, b)).slice(0, 5);
+  const rep = ns.filter(n => (n.n || 1) > 1).sort((a, b) => b.n - a.n).slice(0, 4);
   const contra = links().filter(l => l.r === 'contra');
-  return `<p class="date">${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일 ${'일월화수목금토'[now.getDay()]}요일</p>
+  return `<section class="hello"><p class="date">${now.getMonth() + 1}월 ${now.getDate()}일 ${'일월화수목금토'[now.getDay()]}요일</p>
 <h1 class="mantra"><span>${esc(s.mantra || '오늘 되뇔 한 문장을 골라 보세요')}</span></h1>
-<p class="by">${src ? `${fmtDay(src.at)}에 내가 적은 말` : '내가 고른 문장'}<button data-act="mantra">바꾸기</button></p>
-<p class="brief">생각 <b>${ns.length}개</b>가 쌓였고, 지난 7일 동안 <b>${ns.filter(n => moved(n, wk)).length}개</b>가 움직였습니다. 오늘은 <b>${used}번</b> 열었습니다 <span class="ticks">${[0, 1, 2, 3, 4].map(i => `<i class="${i < used ? 'fill' : ''}"></i>`).join('')}</span> ${used >= 5 ? '하루 다섯 번을 채웠습니다.' : `다섯 번까지 ${5 - used}번 남았습니다.`}${st > 1 ? ` ${st}일째 이어 쓰고 있습니다.` : ''}</p>
-${ideas.length ? `<h2>실행을 기다리는 구상<small>${ns.filter(n => n.k === '구상').length}개 중 앞선 순서</small></h2>${ideas.map(n => `<button class="idea" data-node="${n.id}">${thumb(n)}<span><b>${esc(S.depth <= 1 ? n.w || n.t : n.t)}</b>${S.depth >= 2 ? `<span>${n.next ? '다음 걸음: ' + esc(n.next) : (n.needs || []).length ? '건드리는 욕구: ' + esc(n.needs.join(', ')) : esc(n.g)}</span>` : ''}</span><span class="stage s${n.st || 0}">${STAGES[n.st || 0]}</span></button>`).join('')}` : ''}
-${contra.length ? `<h2>서로 부딪히는 생각</h2>${contra.map(l => `<div class="pair"><div><button data-node="${l.a}">${esc(node(l.a).w || node(l.a).t)}</button><i></i><button data-node="${l.b}">${esc(node(l.b).w || node(l.b).t)}</button></div>${S.depth > 1 && l.why ? `<p>${esc(l.why)}</p>` : ''}</div>`).join('')}` : ''}
-${rep.length ? `<h2>자주 돌아오는 생각</h2>${rep.map(n => card(n)).join('')}` : ''}
-<h2>최근에 적은 생각</h2>
-${ns.length ? `<div class="pgrid">${[...ns].sort(byNew).slice(0, 8).map(n => `<button class="pcard" data-node="${n.id}">${thumb(n)}<b>${esc(S.depth <= 1 ? n.w || n.t : n.t)}</b><span class="meta"><span>${esc(n.c)}</span><span>${fmtDay(n.at)}</span></span></button>`).join('')}</div>` : '<p class="empty">아래 칸에 첫 생각을 한 줄 적어 보세요.</p>'}`;
+<p class="by">${src ? `${fmtDay(src.at)}에 내가 한 말` : '내가 고른 문장'}<button class="lnk" data-act="mantra">바꾸기</button></p></section>
+<section class="card"><div class="hd"><h2>오늘 ${used}번 열었어요</h2><span class="dim">${used >= 5 ? '오늘 목표를 채웠어요' : `5번까지 ${5 - used}번`}</span></div>
+<div class="prog"><i style="width:${Math.min(used / 5, 1) * 100}%"></i></div>
+<div class="kv"><div><b>${ns.length}</b><span>쌓인 생각</span></div><div><b>${ns.filter(n => moved(n, wk)).length}</b><span>이번 주</span></div><div><b>${st}일</b><span>연속</span></div><div><b>${links().length}</b><span>연결</span></div></div></section>
+${o ? `<section class="card"><div class="hd"><h2>다시 꺼내 본 생각</h2><button class="lnk" data-act="another">다른 생각</button></div>
+<button class="old" data-node="${o.id}">${thumb(o, 'big')}<span class="dim">${ago(o.at)} · ${esc(o.g)}</span><b>${esc(o.t)}</b>${S.depth >= 3 && o.s ? `<p>${esc(o.s)}</p>` : ''}</button>
+<p class="dim small" style="margin-top:12px">지금 다시 보면 어떤가요? 열어서 고치거나 다른 생각과 이어 보세요.</p></section>` : ''}
+${ideas.length ? `<section class="card"><div class="hd"><h2>실행을 기다리는 구상</h2><button class="lnk" data-go="time">전체</button></div>${ideas.map(n => `<button class="item" data-node="${n.id}">${thumb(n)}<span class="rb"><b>${esc(S.depth <= 1 ? n.w || n.t : n.t)}</b><span class="meta">${n.next ? `<span>다음 걸음: ${esc(n.next)}</span>` : (n.needs || []).length ? `<span>욕구: ${esc(n.needs.join(', '))}</span>` : `<span>${esc(n.g)}</span>`}${n.v ? '<mark>평가 있음</mark>' : ''}</span></span><span class="stage s${n.st || 0}">${STAGES[n.st || 0]}</span></button>`).join('')}</section>` : ''}
+${contra.length ? `<section class="card"><h2>서로 부딪히는 생각</h2>${contra.map(l => `<div class="pair"><div><button data-node="${l.a}">${esc(node(l.a).w || node(l.a).t)}</button><i>vs</i><button data-node="${l.b}">${esc(node(l.b).w || node(l.b).t)}</button></div>${S.depth > 1 && l.why ? `<p>${esc(l.why)}</p>` : ''}</div>`).join('')}</section>` : ''}
+${rep.length ? `<section class="card"><h2>자주 돌아오는 생각</h2>${rep.map(n => card(n)).join('')}</section>` : ''}
+<section class="card"><h2>최근에 적은 생각</h2>${ns.length ? `<div class="pgrid">${[...ns].sort(byNew).slice(0, 9).map(n => `<button class="pcard" data-node="${n.id}">${thumb(n)}<b>${esc(S.depth <= 1 ? n.w || n.t : n.t)}</b></button>`).join('')}</div>` : '<p class="empty">아래 칸에 첫 생각을 한 줄 적어 보세요.</p>'}</section>`;
 }
 
+// ── 흐름: 날짜순 · 주제별 · 줄기 ───────────────────────────────────────
 function viewTime() {
+  const m = S.flow || 'date';
+  return `<div class="seg sub">${[['date', '날짜순'], ['topic', '주제별'], ['chain', '줄기']].map(([k, l]) => `<button data-flow="${k}" class="${m === k ? 'on' : ''}">${l}</button>`).join('')}</div>` + (m === 'topic' ? flowTopic() : m === 'chain' ? flowChain() : flowDate());
+}
+function flowDate() {
   const ns = nodes().sort(byNew), d = S.depth, by = new Map();
-  for (const n of ns) { const t = new Date(n.at), k = d <= 1 ? `${t.getFullYear()}년 ${t.getMonth() + 1}월` : `${t.getFullYear()}년 ${fmtDay(n.at)}`; if (!by.has(k)) by.set(k, []); by.get(k).push(n); }
-  return `<div class="tl">${[...by].map(([k, list]) => `<h2>${k}<small>${list.length}개</small></h2>${d <= 1
-    ? `<div class="words" style="margin-top:10px">${list.map(n => `<button style="background:${pal(n.c)[0]};color:${pal(n.c)[1]}" data-node="${n.id}">${esc(n.w || n.t)}</button>`).join('')}</div>`
-    : list.map(n => card(n)).join('')}`).join('') || '<p class="empty">아직 적은 생각이 없습니다.</p>'}</div>`;
+  for (const n of ns) { const t = new Date(n.at), k = d <= 1 ? `${t.getFullYear()}년 ${t.getMonth() + 1}월` : `${fmtDay(n.at)} ${'일월화수목금토'[t.getDay()]}요일`; if (!by.has(k)) by.set(k, []); by.get(k).push(n); }
+  return [...by].map(([k, list]) => `<section class="card"><div class="hd"><h2>${k}</h2><span class="dim">${list.length}개</span></div>${d <= 1
+    ? `<div class="words">${list.map(n => `<button style="background:${pal(n.c)[0]};color:${pal(n.c)[1]}" data-node="${n.id}">${esc(n.w || n.t)}</button>`).join('')}</div>`
+    : list.map(n => card(n)).join('')}</section>`).join('') || '<p class="empty">아직 적은 생각이 없습니다.</p>';
+}
+function flowTopic() {
+  const groups = new Map();
+  nodes().forEach(n => { const k = n.c + '›' + n.g; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(n); });
+  const keys = [...groups].sort((a, b) => b[1].length - a[1].length);
+  const cur = groups.has(S.topic) ? S.topic : keys[0]?.[0]; if (!cur) return '<p class="empty">아직 적은 생각이 없습니다.</p>';
+  const list = groups.get(cur).sort((a, b) => a.at - b.at), [c, g] = cur.split('›');
+  return `<div class="chipsc">${keys.map(([k, l]) => `<button data-topic="${esc(k)}" class="${k === cur ? 'on' : ''}" style="--c:${colOf(k.split('›')[0])}">${esc(k.split('›')[1])}<small>${l.length}</small></button>`).join('')}</div>
+<section class="card"><p class="dim">${esc(c)}</p><h2 class="big">${esc(g)}</h2><p class="dim">${fmtDay(list[0].at)}부터 ${fmtDay(list.at(-1).at)}까지 ${list.length}개의 생각이 이렇게 흘러왔습니다</p>
+<div class="tl">${list.map(n => `<div class="tli"><span class="when">${fmtDay(n.at)}</span>${card(n)}</div>`).join('')}</div></section>`;
+}
+function adjOf() {
+  const adj = new Map(), add = (a, b, l) => { if (!adj.has(a)) adj.set(a, []); adj.get(a).push([b, l]); };
+  links().forEach(l => { add(l.a, l.b, l); add(l.b, l.a, l); });
+  return adj;
+}
+function chainOf(id, adj) { const seen = new Set([id]), q = [id]; while (q.length) for (const [o] of adj.get(q.shift()) || []) if (!seen.has(o)) { seen.add(o); q.push(o); } return [...seen]; }
+function flowChain() {
+  const adj = adjOf();
+  if (!S.chain || !adj.has(S.chain) || !node(S.chain)) {
+    const seen = new Set(), list = [];
+    for (const id of adj.keys()) if (!seen.has(id)) { const c = chainOf(id, adj); c.forEach(x => seen.add(x)); const ns = c.map(node).filter(vis); if (ns.length >= 2) list.push(ns.sort((a, b) => a.at - b.at)); }
+    list.sort((a, b) => b.length - a.length);
+    return `<section class="card"><h2>생각이 이어진 줄기</h2><p class="dim">서로 이어진 생각끼리 묶었습니다. 하나를 고르면 처음 생각부터 어떻게 번졌는지 순서대로 보입니다.</p>
+${list.map(ns => { const hub = [...ns].sort((a, b) => adj.get(b.id).length - adj.get(a.id).length)[0]; return `<button class="item" data-chain="${hub.id}">${thumb(hub)}<span class="rb"><b>${esc(hub.t)}</b><span class="meta"><span>${ns.length}개 생각</span><span>${fmtDay(ns[0].at)}부터 ${fmtDay(ns.at(-1).at)}까지</span></span></span></button>`; }).join('') || '<p class="empty">아직 이어진 생각이 없습니다. 생각을 열어 다른 생각과 이어 보세요.</p>'}</section>`;
+  }
+  const ns = chainOf(S.chain, adj).map(node).filter(vis).sort((a, b) => a.at - b.at);
+  return `<section class="card"><button class="lnk" data-chain="">줄기 목록으로</button><h2 class="big" style="margin-top:10px">${esc(node(S.chain).t)}</h2><p class="dim">이 생각과 이어진 ${ns.length}개를 처음부터 순서대로</p>
+<div class="tl">${ns.map((n, i) => {
+    let via = '';
+    const hit = i && (adj.get(n.id) || []).find(([o]) => ns.slice(0, i).some(p => p.id === o));
+    if (hit) { const o = node(hit[0]), l = hit[1]; via = `<p class="via ${l.r === 'contra' ? 'red' : ''}">${l.r === 'contra' ? '부딪힘' : '이어짐'}: ${esc(o.w || o.t)}${l.why ? ` · ${esc(l.why)}` : ''}</p>`; }
+    return `<div class="tli${n.id === S.chain ? ' me' : ''}">${via}<span class="when">${fmtDay(n.at)}</span>${card(n)}</div>`;
+  }).join('')}</div></section>`;
 }
 
 const weekKey = (d = new Date()) => { const t = new Date(d); t.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return ymd(t); };
@@ -240,143 +335,124 @@ function viewReview() {
   const max = Math.max(6, ...days.map(useOf)), full = days.filter(x => useOf(x) >= 5).length;
   const cats = new Map(); ns.forEach(n => cats.set(n.c, (cats.get(n.c) || 0) + 1));
   const top = [...cats].sort((a, b) => b[1] - a[1]), cmax = top[0]?.[1] || 1;
-  const sorted = [...ns].sort((a, b) => a.at - b.at), W = 320, H = 90;
+  const sorted = [...ns].sort((a, b) => a.at - b.at), W = 320, H = 100;
   const t0 = sorted[0]?.at || 0, t1 = Math.max(Date.now(), t0 + 1);
   const pts = sorted.map((n, i) => `${((n.at - t0) / (t1 - t0) * W).toFixed(1)},${(H - (i + 1) / sorted.length * (H - 8)).toFixed(1)}`).join(' ');
   const wg = new Map(); week.forEach(n => wg.set(n.g, (wg.get(n.g) || 0) + 1));
   const revs = all('review').sort((a, b) => b.id.localeCompare(a.id));
-  return `<h1 class="mantra" style="font-size:clamp(22px,5.6vw,34px)">${ns.length}개가 쌓였고, 가장 큰 덩어리는 ${esc(top[0]?.[0] || '아직 없음')}입니다.</h1>
-<h2>생각이 쌓여 온 모습<small>${sorted[0] ? fmtDay(t0) + '부터 오늘까지' : ''}</small></h2>
-<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;margin-top:12px;border-bottom:1px solid var(--ink)"><polyline points="0,${H} ${pts} ${W},8" fill="none" stroke="#2447D6" stroke-width="2"/></svg>
-<div class="btns"><button class="btn" data-act="replayGo">쌓여 온 순서대로 다시 보기</button></div>
-<h2>최근 14일 동안 연 횟수<small>점선이 하루 다섯 번, 채운 날 ${full}일</small></h2>
-<div class="bars" style="--goal:${5 / max * 100}%">${days.map(x => `<div class="${useOf(x) >= 5 ? 'ok' : ''}" style="height:${useOf(x) / max * 100}%" title="${x}, ${useOf(x)}번"></div>`).join('')}</div>
-<h2>생각이 몰려 있는 곳</h2>
-${top.map(([c, n]) => `<div class="hb"><span>${esc(c)}</span><i style="background:${pal(c)[1]};width:${n / cmax * 100}%"></i><span>${n}</span></div>`).join('')}
-<h2>이번 주 돌아보기</h2>
-<p class="brief" style="margin-top:12px;font-size:16px">${week.length ? `지난 7일 동안 <b>${week.length}개</b>의 생각이 움직였습니다. 가장 오래 머문 주제는 ${[...wg].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g, n]) => `${esc(g)}(${n})`).join(', ')}입니다.` : '지난 7일 동안 움직인 생각이 없습니다. 아래 칸에 한 줄을 적으면 여기에 나타납니다.'}</p>
+  return `<section class="card"><h2 class="big">${ns.length}개가 쌓였고, 가장 큰 덩어리는 ${esc(top[0]?.[0] || '아직 없음')}입니다</h2><p class="dim">${sorted[0] ? fmtDay(t0) + '부터 오늘까지' : ''}</p>
+<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;margin-top:14px"><polyline points="0,${H} ${pts} ${W},8" fill="none" stroke="var(--blue)" stroke-width="2.5" stroke-linejoin="round"/></svg></section>
+<section class="card"><div class="hd"><h2>최근 14일 동안 연 횟수</h2><span class="dim">5번 채운 날 ${full}일</span></div><p class="dim small">빨간 점선이 하루 다섯 번입니다</p>
+<div class="bars" style="--goal:${5 / max * 100}%">${days.map(x => `<div class="${useOf(x) >= 5 ? 'ok' : ''}" style="height:${useOf(x) / max * 100}%" title="${x}, ${useOf(x)}번"></div>`).join('')}</div></section>
+<section class="card"><h2>생각이 몰려 있는 곳</h2>${top.map(([c, n]) => `<div class="hb"><span>${esc(c)}</span><i style="background:${colOf(c)};width:${n / cmax * 100}%"></i><span>${n}</span></div>`).join('')}</section>
+<section class="card"><h2>이번 주 돌아보기</h2><p style="margin:0;line-height:1.7">${week.length ? `지난 7일 동안 <b>${week.length}개</b>의 생각이 움직였습니다. 가장 오래 머문 주제는 ${[...wg].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g, n]) => `${esc(g)}(${n})`).join(', ')}입니다.` : '지난 7일 동안 움직인 생각이 없습니다.'}</p>
 <div class="btns"><button class="btn pri" data-act="weekly">AI로 회고 쓰기</button><button class="btn" data-act="search">내 생각에 질문하기</button></div>
-${revs.map(r => `<h3>${fmtDay(new Date(r.id.slice(4)).getTime())} 주</h3><div class="ans">${esc(r.text)}</div>`).join('')}`;
+${revs.map(r => `<p class="dim" style="margin-top:20px">${fmtDay(new Date(r.id.slice(4)).getTime())} 주${r.by ? ' · ' + esc(r.by) : ''}</p><div class="ans">${esc(r.text)}</div>`).join('')}</section>`;
 }
 async function weekly() {
   const wk = Date.now() - 7 * DAY, week = nodes().filter(n => moved(n, wk));
   if (!week.length) return toast('지난 7일 동안 움직인 생각이 없습니다');
-  const r = await busy('이번 주를 돌아보는 중입니다', () => gem(`한 사람이 이번 주에 적은 생각 목록이다. 주간 회고를 JSON으로만 답하라. 한국어, 존댓말. 지어내지 말고 목록에 있는 내용만 근거로.
+  const r = await busy('이번 주를 돌아보는 중입니다', () => gemT('weekly', `한 사람이 이번 주에 적은 생각 목록이다. 주간 회고를 JSON으로만 답하라. 한국어, 존댓말. 지어내지 말고 목록에 있는 내용만 근거로.
 형식: {"text":"회고 본문. 첫 문단: 이번 주 생각이 흐른 방향 2~3문장. 둘째 문단: 반복되거나 서로 부딪힌 생각. 셋째 문단: 다음 주에 실행으로 옮길 만한 한 가지. 문단은 빈 줄로 구분."}
 
 ${week.map(n => `- [${n.k}] ${n.t} : ${(n.s || '').slice(0, 120)}${(n.n || 1) > 1 ? ` (${n.n}번)` : ''}`).join('\n')}`));
-  if (r?.text) put({ id: 'rev:' + weekKey(), kind: 'review', text: String(r.text), at: Date.now() });
+  if (r?.text) put({ id: 'rev:' + weekKey(), kind: 'review', text: String(r.text), by: r._by, at: Date.now() });
 }
 
-// ── 보드: 지도(가지)와 연결 — 끌어서 옮기고 벌려서 확대하는 작업판 ─────
-const B = { k: 1, tx: 0, ty: 0, drag: 0, rel: false, items: [], fitKey: '', ptr: new Map(), pinch: 0, relKey: '', relOut: null };
+// ── 지도: 가운데 '나의 생각'에서 왼쪽·오른쪽으로 퍼지는 마인드맵 ────────────
+// 대분류(색 알약) → 주제(밑줄 글자) → 생각(작은 사진 + 한 줄). 가지를 누르면 펼쳐지며 그쪽으로 다가갑니다.
+const B = { k: 1, tx: 0, ty: 0, drag: 0, items: [], fitKey: '', ptr: new Map(), pinch: 0 };
 const isOpen = (key, lvl) => S.open.has(key) ? true : (S.depth >= lvl && !S.open.has('!' + key));
-const leafHtml = (n, d) => {
-  const [bg, fg] = pal(n.c), hot = (n.n || 1) > 1 ? ' hot' : '', st = `background:${bg};color:${fg}`;
-  if (d <= 2) return [`leaf d2${hot}`, st, `<b>${esc(n.t)}</b>`];
-  if (d === 3) return [`leaf d3${hot}`, st, `${thumb(n)}<div><b>${esc(n.t)}</b>${n.s ? `<span>${esc(n.s)}</span>` : ''}</div>`];
-  return [`leaf d4${hot}`, st, `${thumb(n)}<div><b>${esc(n.t)}</b>${n.s ? `<span>${esc(n.s)}</span>` : ''}</div>`];
-};
-function treeItems() {
-  const ns = nodes(), d = S.depth, tree = new Map();
+const tw = (t, px) => [...String(t)].reduce((s, ch) => s + (/[ㄱ-힣一-鿿]/.test(ch) ? px * 0.96 : ch === ' ' ? px * 0.28 : px * 0.56), 0);
+function mapItems() {
+  const ns = nodes(), d = S.depth, tree = new Map(), at = new Map();
   for (const n of ns) { if (!tree.has(n.c)) tree.set(n.c, new Map()); const g = tree.get(n.c); if (!g.has(n.g)) g.set(n.g, []); g.get(n.g).push(n); }
-  const LH = d <= 2 ? 40 : d === 3 ? 96 : 176, LW = d <= 2 ? 250 : 280, GAP = 10, CW = 176, GW = 210;
-  const X = [135, 135 + CW + 56, 135 + CW + 56 + GW + 56];   // 대분류, 주제, 생각 열이 시작하는 곳(가운데에서의 거리)
-  const items = [{ x: -80, y: -28, w: 160, h: 56, cls: 'root', html: `나의 생각<small>${ns.length}</small>` }], wires = [], at = new Map();
+  const LH = d >= 4 ? 52 : 34, GH = 34, CH = 44, GAP = 8, CGAP = 26;
   const cats = [...tree].map(([c, gs]) => {
     const open = isOpen('c:' + c, 2);
-    const h = !open ? 48 : [...gs].reduce((s, [g, l]) => s + (isOpen('g:' + c + '>' + g, 3) ? l.length * (LH + GAP) - GAP : 42) + GAP, -GAP);
-    return { c, gs, open, h: Math.max(48, h), cnt: [...gs.values()].reduce((s, l) => s + l.length, 0) };
+    const groups = [...gs].sort((a, b) => b[1].length - a[1].length).map(([g, l]) => { const go = open && isOpen('g:' + c + '>' + g, 3); return { g, l: l.sort(byNew), open: go, h: go ? Math.max(GH, l.length * LH) : GH }; });
+    return { c, groups, open, h: open ? Math.max(CH, groups.reduce((s, x) => s + x.h + GAP, -GAP)) : CH, cnt: [...gs.values()].reduce((s, l) => s + l.length, 0) };
   }).sort((a, b) => b.cnt - a.cnt);
-  const narrow = innerWidth < 700;   // 폰에서는 가지를 오른쪽 한쪽으로만 뻗음
-  const sides = [{ dir: 1, y: 0, list: [] }, { dir: -1, y: 0, list: [] }];
-  for (const c of cats) { const s = narrow || sides[0].y <= sides[1].y ? sides[0] : sides[1]; s.list.push(c); s.y += c.h + 26; }
-  const wire = (a, b, dir) => { const x1 = dir > 0 ? a.x + a.w : a.x, y1 = a.y + a.h / 2, x2 = dir > 0 ? b.x : b.x + b.w, y2 = b.y + b.h / 2, m = (x1 + x2) / 2; wires.push(`<path d="M${x1} ${y1}C${m} ${y1} ${m} ${y2} ${x2} ${y2}"/>`); };
+  const sides = [{ dir: 1, h: 0, list: [] }, { dir: -1, h: 0, list: [] }];
+  for (const c of cats) { const s = sides[0].h <= sides[1].h ? sides[0] : sides[1]; s.list.push(c); s.h += c.h + CGAP; }
+  const RW = tw('나의 생각', 18) + 76, items = [{ x: -RW / 2, y: -27, w: RW, h: 54, cls: 'mroot', html: `나의 생각<small>${ns.length}</small>`, act: 'fit' }], wires = [];
+  const curve = (x1, y1, x2, y2, col, w) => { const m = (x1 + x2) / 2; wires.push(`<path d="M${x1.toFixed(1)} ${y1.toFixed(1)}C${m.toFixed(1)} ${y1.toFixed(1)} ${m.toFixed(1)} ${y2.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}" stroke="${col}" stroke-width="${w}"/>`); };
+  const under = (x1, x2, y, col, w) => wires.push(`<path d="M${x1.toFixed(1)} ${y.toFixed(1)}H${x2.toFixed(1)}" stroke="${col}" stroke-width="${w}"/>`);
   for (const s of sides) {
-    let y = -(s.y - 26) / 2;
-    const px = (i, w) => s.dir > 0 ? X[i] : -(X[i] + w);
+    let y = -(s.h - CGAP) / 2;
     for (const c of s.list) {
-      const top = y, [, fg] = pal(c.c), ck = 'c:' + c.c, kids = [];
-      if (c.open) for (const [g, list] of c.gs) {
-        const gk = 'g:' + c.c + '>' + g, gtop = y, gopen = isOpen(gk, 3), leaves = [];
-        if (gopen) for (const n of list.sort(byNew)) {
-          const [cls, st, html] = leafHtml(n, d), it = { x: px(2, LW), y, w: LW, h: LH, cls, st, html, node: n.id };
-          items.push(it); leaves.push(it); at.set(n.id, it); y += LH + GAP;
-        } else y += 42 + GAP;
-        const gi = { x: px(1, GW), y: (gtop + y - GAP) / 2 - 21, w: GW, h: 42, cls: 'grp', st: `border-color:${fg};color:${fg}`, html: `<span>${esc(g)}</span><small>${list.length}</small>`, tog: gk, lvl: 3 };
-        items.push(gi); kids.push(gi); leaves.forEach(l => wire(gi, l, s.dir));
-      } else y += 48 + GAP;
-      const ci = { x: px(0, CW), y: (top + y - GAP) / 2 - 24, w: CW, h: 48, cls: 'cat', st: `background:${fg}`, html: `<span>${esc(c.c)}</span><small>${c.cnt}</small>`, tog: ck, lvl: 2 };
-      items.push(ci); kids.forEach(k => wire(ci, k, s.dir)); wire(items[0], ci, s.dir);
-      y += 26 - GAP;
+      const col = colOf(c.c), cw = tw(c.c, 15) + 64, cx = s.dir > 0 ? RW / 2 + 64 : -(RW / 2 + 64) - cw, cy = y + c.h / 2, cEnd = s.dir > 0 ? cx + cw : cx, ck = 'c:' + c.c;
+      let gy = y;
+      if (c.open) for (const g of c.groups) {
+        const gw = Math.min(250, tw(g.g, 14) + 44), gx = s.dir > 0 ? cEnd + 54 : cEnd - 54 - gw, gyc = gy + g.h / 2, gEnd = s.dir > 0 ? gx + gw : gx, gk = 'g:' + c.c + '>' + g.g, base = gyc + GH / 2 - 2;
+        items.push({ x: gx, y: gyc - GH / 2, w: gw, h: GH, cls: 'mgrp', st: `--c:${col}`, html: `<span>${esc(g.g)}</span><small>${g.l.length}</small>`, tog: gk, lvl: 3, sub: [ck] });
+        under(gx, gx + gw, base, col, 2.2);
+        curve(cEnd, cy, s.dir > 0 ? gx : gx + gw, base, col, 2.6);
+        if (g.open) g.l.forEach((n, i) => {
+          const ly = gy + i * LH, lw = Math.min(d >= 4 ? 300 : 250, tw(n.t, 13.5) + (pic(n) ? (d >= 4 ? 50 : 38) : 14)), lx = s.dir > 0 ? gEnd + 44 : gEnd - 44 - lw, lb = ly + LH - 3;
+          items.push({ x: lx, y: ly, w: lw, h: LH, cls: 'mleaf' + (d >= 4 ? ' d4' : '') + ((n.n || 1) > 1 ? ' hot' : ''), node: n.id, sub: [ck, gk],
+            html: `${pic(n) ? `<img src="${esc(pic(n))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}<span><b>${esc(n.t)}</b>${d >= 4 && n.s ? `<i>${esc(n.s)}</i>` : ''}</span>` });
+          under(lx, lx + lw, lb, col, 1.3);
+          curve(gEnd, base, s.dir > 0 ? lx : lx + lw, lb, col, 1.4);
+          at.set(n.id, [s.dir > 0 ? lx + lw : lx, lb, s.dir]);
+        });
+        gy += g.h + GAP;
+      }
+      items.push({ x: cx, y: cy - CH / 2, w: cw, h: CH, cls: 'mcat', st: `--c:${col}`, html: `<span>${esc(c.c)}</span><small>${c.cnt}</small>`, tog: ck, lvl: 2 });
+      curve(s.dir > 0 ? RW / 2 - 4 : -RW / 2 + 4, 0, s.dir > 0 ? cx : cx + cw, cy, col, 4.5);
+      y += c.h + CGAP;
     }
   }
   for (const l of links()) {
-    if (l.r !== 'contra' && !B.rel) continue;
+    if (l.r !== 'contra') continue;
     const a = at.get(l.a), b = at.get(l.b); if (!a || !b) continue;
-    const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2, same = Math.sign(ax) === Math.sign(bx);
-    wires.push(`<path class="${l.r === 'contra' ? 'contra' : 'rel'}" d="M${ax} ${ay}Q${same ? ax + Math.sign(ax) * (a.w / 2 + 70) : 0} ${(ay + by) / 2} ${bx} ${by}"/>`);
+    const bend = (a[2] + b[2]) * 90;
+    wires.push(`<path class="contra" d="M${a[0].toFixed(0)} ${a[1].toFixed(0)}Q${((a[0] + b[0]) / 2 + bend).toFixed(0)} ${((a[1] + b[1]) / 2).toFixed(0)} ${b[0].toFixed(0)} ${b[1].toFixed(0)}"/>`);
   }
   return { items, wires };
 }
-function relItems() {
-  const ns = nodes(), ls_ = links(), d = S.depth, key = [ns.length, ls_.length, d <= 1, S.unlocked].join();
-  if (B.relKey === key && B.relOut) return B.relOut;
-  const cats = [...new Set(ns.map(n => n.c))], R = Math.max(200, 34 * Math.sqrt(ns.length)), W = d <= 1 ? 104 : 190, H = d <= 1 ? 44 : 60;
-  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5;
-  const idx = new Map(), P = ns.map(n => { const i = cats.indexOf(n.c), a = i / cats.length * 6.283, p = { n, cx: Math.cos(a) * R, cy: Math.sin(a) * R, vx: 0, vy: 0 }; p.x = p.cx + rnd() * 120; p.y = p.cy + rnd() * 120; idx.set(n.id, p); return p; });
-  const L = ls_.map(l => [idx.get(l.a), idx.get(l.b), l.r]).filter(l => l[0] && l[1]);
-  for (let it = 0, a = 1; it < 260; it++, a *= 0.985) {
-    for (let i = 0; i < P.length; i++) {
-      const p = P[i];
-      for (let j = i + 1; j < P.length; j++) { const q = P[j]; let dx = p.x - q.x, dy = p.y - q.y, d2 = dx * dx + dy * dy; if (d2 > 22500) continue; if (d2 < 1) { dx = rnd(); dy = rnd(); d2 = 1; } const f = a * 420 / (d2 + 60); p.vx += dx * f; p.vy += dy * f; q.vx -= dx * f; q.vy -= dy * f; }
-      p.vx += (p.cx - p.x) * 0.02 * a; p.vy += (p.cy - p.y) * 0.02 * a;
-    }
-    for (const [p, q] of L) { const dx = q.x - p.x, dy = q.y - p.y, dd = Math.hypot(dx, dy) || 1, f = (dd - 70) * 0.012 * a / dd; p.vx += dx * f; p.vy += dy * f; q.vx -= dx * f; q.vy -= dy * f; }
-    for (const p of P) { p.vx *= 0.8; p.vy *= 0.8; p.x += p.vx; p.y += p.vy; }
-  }
-  for (const p of P) { p.x *= W / 62; p.y *= H / 46; }
-  for (let it = 0; it < 60; it++) for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
-    const p = P[i], q = P[j], ox = W + 14 - Math.abs(p.x - q.x), oy = H + 12 - Math.abs(p.y - q.y);
-    if (ox <= 0 || oy <= 0) continue;
-    if (ox / W < oy / H) { const s = (p.x < q.x ? -1 : 1) * ox / 2; p.x += s; q.x -= s; } else { const s = (p.y < q.y ? -1 : 1) * oy / 2; p.y += s; q.y -= s; }
-  }
-  const items = cats.map(c => { const m = P.filter(p => p.n.c === c); return { x: m.reduce((s, p) => s + p.x, 0) / m.length, y: Math.min(...m.map(p => p.y)) - 70, w: 0, h: 0, cls: 'lab', st: `color:${pal(c)[1]}`, html: esc(c) }; });
-  for (const p of P) {
-    const n = p.n, [bg, fg] = pal(n.c);
-    items.push({ x: p.x - W / 2, y: p.y - H / 2, w: W, h: H, cls: 'chip' + ((n.n || 1) > 1 ? ' hot' : ''), st: `background:${bg};color:${fg}`, node: n.id, at: n.at, html: d <= 1 ? `<b>${esc(n.w || n.t)}</b>` : `${thumb(n)}<b>${esc(n.t)}</b>` });
-  }
-  const wires = L.map(([p, q, r]) => `<line class="${r === 'contra' ? 'contra' : ''}" x1="${p.x.toFixed(0)}" y1="${p.y.toFixed(0)}" x2="${q.x.toFixed(0)}" y2="${q.y.toFixed(0)}"/>`);
-  B.relKey = key; return B.relOut = { items, wires };
-}
-function drawBoard(mode) {
-  const { items, wires } = mode === 'map' ? treeItems() : relItems();
-  B.items = items;
-  $('#main').innerHTML = `<div id="bd"><div id="world"><svg id="wires">${wires.join('')}</svg>${items.map(i => `<${i.node || i.tog ? 'button' : 'div'} class="nd ${i.cls}" style="left:${i.x.toFixed(0)}px;top:${i.y.toFixed(0)}px;${i.w ? `width:${i.w}px;height:${i.h}px;` : ''}${i.st || ''}"${i.node ? ` data-node="${i.node}"` : ''}${i.tog ? ` data-tog="${esc(i.tog)}" data-lvl="${i.lvl}"` : ''}${i.at ? ` data-at="${i.at}"` : ''}>${i.html}</${i.node || i.tog ? 'button' : 'div'}>`).join('')}</div></div>
-<div class="bdui"><button data-act="fit">전체 보기</button><button data-act="zout" aria-label="축소">−</button><span id="zoomPct"></span><button data-act="zin" aria-label="확대">＋</button>${mode === 'map' ? `<button data-act="relToggle" class="${B.rel ? 'on' : ''}">관련선</button>` : '<button data-act="replay">쌓인 순서로</button><span id="replayDate" hidden></span>'}</div>`;
+function drawMap() {
+  const { items, wires } = mapItems(); B.items = items;
+  $('#main').innerHTML = `<div id="bd"><div id="world"><svg id="wires">${wires.join('')}</svg>${items.map(i => { const tag = i.node || i.tog || i.act ? 'button' : 'div'; return `<${tag} class="nd ${i.cls}" style="left:${i.x.toFixed(0)}px;top:${i.y.toFixed(0)}px;width:${i.w.toFixed(0)}px;height:${i.h.toFixed(0)}px;${i.st || ''}"${i.node ? ` data-node="${i.node}"` : ''}${i.tog ? ` data-tog="${esc(i.tog)}" data-lvl="${i.lvl}"` : ''}${i.act ? ` data-act="${i.act}"` : ''}>${i.html}</${tag}>`; }).join('')}</div></div>
+<p class="bdhint">${matchMedia('(pointer:coarse)').matches ? '끌어서 이동, 두 손가락으로 확대. 가지를 누르면 펼쳐집니다.' : '끌어서 이동, 휠로 확대. 가지를 누르면 펼쳐집니다.'}</p>
+<div class="bdui"><button data-act="fit">전체</button><button data-act="zout" aria-label="축소">−</button><span id="zoomPct"></span><button data-act="zin" aria-label="확대">+</button></div>`;
   const bd = $('#bd');
   bd.addEventListener('pointerdown', e => { B.ptr.set(e.pointerId, [e.clientX, e.clientY]); if (B.ptr.size === 1) B.drag = 0; B.pinch = 0; });
-  bd.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY); }, { passive: false });
-  const key = mode + (mode === 'map' ? S.depth : S.depth <= 1) + S.unlocked;
+  bd.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (e.ctrlKey) zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);                       // 노트북 터치패드 벌리기
+    else if (e.deltaMode || (Math.abs(e.deltaY) >= 50 && !e.deltaX)) zoomAt(e.deltaY < 0 ? 1.15 : 0.87, e.clientX, e.clientY);   // 마우스 휠
+    else { B.tx -= e.deltaX; B.ty -= e.deltaY; applyT(); }                                          // 터치패드 두 손가락 이동
+  }, { passive: false });
+  const key = 'map' + S.depth + S.unlocked + nodes().length;
   if (B.fitKey !== key) { B.fitKey = key; fitBoard(false); } else applyT();
 }
-function applyT() {
+function applyT(anim) {
   const w = $('#world'), bd = $('#bd'); if (!w) return;
+  w.style.transition = anim ? 'transform .38s cubic-bezier(.2,.8,.2,1)' : '';
   w.style.transform = `translate(${B.tx}px,${B.ty}px) scale(${B.k})`;
-  const g = 26 * B.k * (B.k < 0.4 ? 4 : 1);
-  bd.style.backgroundSize = `${g}px ${g}px`; bd.style.backgroundPosition = `${B.tx}px ${B.ty}px`;
   $('#zoomPct').textContent = Math.round(B.k * 100) + '%';
 }
-function fitBoard(all_) {
-  const bd = $('#bd'); if (!bd) return;
-  const W = bd.clientWidth, H = bd.clientHeight, its = B.items.filter(i => i.w);
-  if (!its.length) return applyT();
+function frame(list, kMax = 1.1, kMin = 0.04, anim) {
+  const bd = $('#bd'); if (!bd || !list.length) return applyT();
+  const W = bd.clientWidth, H = bd.clientHeight - 56;
+  const x0 = Math.min(...list.map(i => i.x)), x1 = Math.max(...list.map(i => i.x + i.w)), y0 = Math.min(...list.map(i => i.y)), y1 = Math.max(...list.map(i => i.y + i.h));
+  B.k = Math.max(kMin, Math.min(kMax, W / (x1 - x0 + 48), H / (y1 - y0 + 48)));
+  let cy = (y0 + y1) / 2; if ((y1 - y0) * B.k > H - 48) cy = y0 + (H / 2 - 24) / B.k;   // 다 안 들어가면 위쪽부터
+  B.tx = W / 2 - (x0 + x1) / 2 * B.k; B.ty = 12 + H / 2 - cy * B.k;
+  applyT(anim);
+}
+function fitBoard(all_, anim) {
+  const W = $('#bd')?.clientWidth || 400, its = B.items;
+  if (all_) return frame(its, 1.1, 0.04, anim);
+  // 처음 열 때: 다 보여도 글씨가 읽히면 전체, 아니면 '나의 생각'과 대분류까지만 읽히는 크기로
   const x0 = Math.min(...its.map(i => i.x)), x1 = Math.max(...its.map(i => i.x + i.w)), y0 = Math.min(...its.map(i => i.y)), y1 = Math.max(...its.map(i => i.y + i.h));
-  const k = Math.min(W / (x1 - x0 + 60), (H - 50) / (y1 - y0 + 60), 1.1);
-  if (all_ || k >= 0.72) { B.k = Math.max(0.04, k); B.tx = W / 2 - (x0 + x1) / 2 * B.k; B.ty = (H + 40) / 2 - (y0 + y1) / 2 * B.k; }
-  else if (S.view === 'map') { B.k = 0.85; const nar = innerWidth < 700; B.tx = nar ? 14 - 135 * B.k : W / 2; B.ty = nar ? 64 - y0 * B.k : H / 2; }   // 다 안 들어가면 읽을 수 있는 크기로, 폰은 첫 가지부터
-  else { B.k = 0.8; B.tx = W / 2 - (x0 + x1) / 2 * B.k; B.ty = H / 2 - (y0 + y1) / 2 * B.k; }   // 너무 작아지면 가운데부터 읽을 수 있는 크기로
-  applyT();
+  const k = Math.min(W / (x1 - x0 + 48), ($('#bd').clientHeight - 104) / (y1 - y0 + 48));
+  frame(k >= 0.62 ? its : its.filter(i => i.cls === 'mroot' || i.cls === 'mcat'), 1.1, W < 700 ? 0.85 : 0.6, anim);   // 폰에서는 글씨가 읽히는 크기를 먼저
+}
+function focusOn(key) {
+  const list = B.items.filter(i => i.tog === key || i.sub?.includes(key));
+  if (list.length > 1) frame(list, 1.15, ($('#bd')?.clientWidth || 800) < 700 ? 0.85 : 0.6, true);
 }
 function zoomAt(f, cx, cy) {
   const r = $('#bd').getBoundingClientRect(), ox = (cx ?? r.left + r.width / 2) - r.left, oy = (cy ?? r.top + r.height / 2) - r.top, nk = Math.min(3, Math.max(0.04, B.k * f)); f = nk / B.k;
@@ -391,28 +467,20 @@ addEventListener('pointermove', e => {
 });
 const ptrEnd = e => { B.ptr.delete(e.pointerId); B.pinch = 0; };
 addEventListener('pointerup', ptrEnd); addEventListener('pointercancel', ptrEnd);
-function replay() {
-  const els = [...document.querySelectorAll('#world .chip')].sort((a, b) => a.dataset.at - b.dataset.at), lab = $('#replayDate');
-  if (!els.length) return;
-  fitBoard(true); els.forEach(e => e.classList.add('hid')); $('#wires').style.visibility = 'hidden'; lab.hidden = false;
-  let i = 0; clearInterval(B.timer);
-  B.timer = setInterval(() => {
-    if (!els[i] || !els[i].isConnected) { clearInterval(B.timer); if ($('#wires')) { $('#wires').style.visibility = ''; lab.hidden = true; } return; }
-    els[i].classList.remove('hid'); lab.textContent = `${fmtDay(+els[i].dataset.at)}, ${++i}개`;
-  }, Math.max(30, 7000 / els.length));
-}
 
 // ── 화면 그리기와 뒤로가기 ────────────────────────────────────────────
 // 뒤로가기는 "창 닫기 → 이전 화면 → 첫 화면" 순서로만 움직이고 사이트 밖으로 나가지 않습니다.
 const NAV = [], SH = [];
+const TITLES = { home: '홈', map: '지도', time: '흐름', review: '회고' };
 function render() {
   if (!S.user) return;
-  $('#depth').value = S.depth; $('#depthName').textContent = DEPTHS[S.depth];
-  $('#lockBtn').textContent = S.unlocked ? '잠금 열림' : '잠금'; $('#lockBtn').classList.toggle('on', S.unlocked);
+  $('#ttl').textContent = TITLES[S.view] || '홈';
+  document.querySelectorAll('#depthSeg button').forEach(b => b.classList.toggle('on', +b.dataset.depth === S.depth));
+  $('#lockBtn').classList.toggle('on', S.unlocked); $('#lockBtn').setAttribute('aria-label', S.unlocked ? '잠금 영역 닫기' : '잠금 영역 열기');
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.go === S.view));
-  const board = S.view === 'map' || S.view === 'rel';
-  $('#main').className = board ? 'board' : '';
-  if (board) return drawBoard(S.view);
+  const board = S.view === 'map';
+  $('#main').className = board ? 'board' : ''; $('#app').classList.toggle('wide', board);
+  if (board) return drawMap();
   const top = $('#main').scrollTop;
   $('#main').innerHTML = S.view === 'time' ? viewTime() : S.view === 'review' ? viewReview() : viewHome();
   $('#main').scrollTop = top;
@@ -439,6 +507,7 @@ addEventListener('popstate', () => {
   S.pick = null;
   if (SH.length) SH[SH.length - 1](); else $('#sheet').hidden = true;
   render();
+  if (!SH.length && S.after) { const f = S.after; S.after = null; f(); }
 });
 
 // ── 창(아래에서 올라오는 시트) ────────────────────────────────────────
@@ -455,12 +524,15 @@ async function drawNode(id) {
   const n = node(id); if (!n) return history.back();
   S.sel = id;
   const ls_ = linksOf(id), [bg, fg] = pal(n.c);
-  sheet(`${n.ph ? '<div id="photo"></div>' : n.img ? `<img class="cover" src="${esc(n.img)}" alt="" referrerpolicy="no-referrer">` : ''}
-<div class="chips" style="margin-top:0"><span class="chip" style="background:${bg};color:${fg}">${esc(n.c)}</span><span class="chip">${esc(n.g)}</span><span class="chip">${esc(n.k)}</span><span class="chip">${STAGES[n.st || 0]}</span><span class="chip">${fmtDay(n.at)}</span>${(n.n || 1) > 1 ? `<span class="chip" style="background:var(--hl)">${n.n}번 떠올림</span>` : ''}${n.p ? '<span class="chip">잠금 영역</span>' : ''}</div>
+  const v = n.v;
+  sheet(`<div class="grab"></div>${n.ph ? '<div id="photo"></div>' : n.img ? `<img class="cover" src="${esc(n.img)}" alt="" referrerpolicy="no-referrer">` : ''}
+<div class="chips" style="margin-top:0"><span class="chip" style="background:${bg};color:${fg}">${esc(n.c)}</span><span class="chip">${esc(n.g)}</span><span class="chip">${esc(n.k)}</span><span class="chip">${STAGES[n.st || 0]}</span><span class="chip">${fmtDay(n.at)}</span>${(n.n || 1) > 1 ? `<span class="chip need">${n.n}번 떠올림</span>` : ''}${n.p ? '<span class="chip">잠금 영역</span>' : ''}</div>
 <p class="ttl">${esc(n.t)}</p>
-<div class="rb">${body(n, 5).replace(/^<b>.*?<\/b>/, '')}</div>
-${n.url ? `<p class="hint"><a href="${esc(n.url)}" target="_blank" rel="noopener">원본 열기</a>${n.imgSrc ? ` &nbsp; <a href="${esc(n.imgSrc)}" target="_blank" rel="noopener">사진 출처</a>` : ''}</p>` : n.imgSrc ? `<p class="hint"><a href="${esc(n.imgSrc)}" target="_blank" rel="noopener">사진 출처</a></p>` : ''}
-<div class="btns"><button class="btn pri" data-act="organize">AI로 정리</button><button class="btn" data-act="persp">세 관점과 욕구 보기</button><button class="btn" data-act="toPlanner">플래너로 보내기</button></div>
+<div class="rb">${body(n, 5, true).replace(/^<b>.*?<\/b>/, '')}</div>
+${n.url ? `<p class="dim" style="margin-top:10px"><a href="${esc(n.url)}" target="_blank" rel="noopener">원본 열기</a>${n.imgSrc ? ` &nbsp; <a href="${esc(n.imgSrc)}" target="_blank" rel="noopener">사진 출처</a>` : ''}</p>` : n.imgSrc ? `<p class="dim" style="margin-top:10px"><a href="${esc(n.imgSrc)}" target="_blank" rel="noopener">사진 출처</a></p>` : ''}
+<section class="evalbox"><div class="hd"><h3>세 관점과 사람들의 욕구</h3>${v ? '<button class="lnk" data-act="persp">다시 평가</button>' : ''}</div>
+${v ? views(v) + `<p class="dim small" style="margin-top:10px">${v.by ? esc(v.by) + '가 ' : ''}${v.at ? fmtDay(v.at) + '에 ' : ''}평가해 이 카드에 저장했습니다</p>` : '<p class="dim">투자자·고객·경쟁자의 눈으로 이 생각을 보고, 사람들이 어떤 욕구로 원할지 평가합니다. 결과는 이 카드에 저장됩니다.</p><button class="btn pri wide" data-act="persp">평가 받기</button>'}</section>
+<div class="btns"><button class="btn" data-act="organize">AI로 정리</button><button class="btn" data-act="chainGo">줄기 보기</button><button class="btn" data-act="toPlanner">플래너로 보내기</button></div>
 <h3>이어진 생각 ${ls_.length}개</h3>
 ${ls_.map(({ l, o }) => `<div class="lk"><button data-node="${o.id}">${esc(o.t)}${l.why ? `<small>${esc(l.why)}</small>` : ''}</button><button class="chip ${l.r === 'contra' ? 'red' : ''}" data-act="linkType" data-id="${l.id}">${l.r === 'contra' ? '부딪힘' : '관련'}</button><button class="chip" data-act="linkDel" data-id="${l.id}">끊기</button></div>`).join('')}
 <div class="btns"><button class="btn" data-act="linkAdd">다른 생각과 잇기</button></div>
@@ -509,7 +581,7 @@ ${pick ? '' : '<div class="btns"><button class="btn pri" data-act="askQ">이 문
 });
 async function ask(q) {
   if (!q) return toast('물어볼 문장을 먼저 적어 주세요');
-  const r = await busy('내 생각들을 읽는 중입니다', () => gem(`아래는 한 사람의 생각 노트 목록(id|한 줄|요약)이다. 이 목록만 근거로 질문에 답하라. 목록에 없으면 없다고 말하라. 한국어 존댓말. JSON으로만: {"answer":"답 3~6문장","ids":["근거가 된 생각 id 최대 6개"]}
+  const r = await busy('내 생각들을 읽는 중입니다', () => gemT('ask', `아래는 한 사람의 생각 노트 목록(id|한 줄|요약)이다. 이 목록만 근거로 질문에 답하라. 목록에 없으면 없다고 말하라. 한국어 존댓말. JSON으로만: {"answer":"답 3~6문장","ids":["근거가 된 생각 id 최대 6개"]}
 
 [질문] ${q}
 
@@ -528,7 +600,7 @@ const openMantra = () => show('mantra', () => {
 <div class="btns"><button class="btn pri" data-act="mantraSave">이 문장으로 정하기</button><button class="btn" data-act="mantraAi">AI에게 후보 받기</button></div>`);
 });
 async function mantraAi() {
-  const r = await busy('후보 문장을 뽑는 중입니다', () => gem(`아래는 한 사람이 직접 한 생각들이다. 이 사람이 매일 되뇔 만한 문장 후보 5개를 그 사람의 말투와 내용에서 뽑아라. 각 30자 이내, 지어내지 말고 생각에 근거. JSON으로만: {"list":["...","..."]}
+  const r = await busy('후보 문장을 뽑는 중입니다', () => gemT('mantra', `아래는 한 사람이 직접 한 생각들이다. 이 사람이 매일 되뇔 만한 문장 후보 5개를 그 사람의 말투와 내용에서 뽑아라. 각 30자 이내, 지어내지 말고 생각에 근거. JSON으로만: {"list":["...","..."]}
 
 ${nodes().filter(n => n.k !== '자료').sort((a, b) => (b.n || 1) - (a.n || 1) || byNew(a, b)).slice(0, 60).map(n => `- ${n.t}${(n.n || 1) > 1 ? ` (${n.n}번)` : ''}`).join('\n')}`));
   if (r?.list && $('#mlist')) $('#mlist').innerHTML = r.list.map(mantraBtn).join('');
@@ -566,7 +638,7 @@ async function fillImages() {
     t.textContent = `그림을 붙이는 중입니다 ${i + 1}/${list.length}`;
     await new Promise(r => setTimeout(r, 300));
   }
-  t.remove(); B.relKey = ''; render();
+  t.remove();  render();
   toast(fail >= 4 ? `사진 서버가 응답하지 않아 ${ok}개에서 멈췄습니다. 잠시 뒤 다시 눌러 주세요.` : `그림 ${ok}개를 붙였습니다`);
 }
 
@@ -576,7 +648,13 @@ function drawSettings() {
   const s = settings();
   sheet(`<h2>설정</h2>
 <div><b>${esc(S.user.email || '')}</b><div class="btns"><button class="btn" data-act="logout">로그아웃</button><a class="btn" href="${CFG.vending}">자판기 열기</a><a class="btn" href="${CFG.planner}">플래너 열기</a><a class="btn" href="${CFG.quest}">한 달 퀘스트</a></div><p class="hint" style="margin-bottom:0">자판기·플래너와 로그인을 함께 씁니다. 여기서 로그아웃하면 그쪽도 로그아웃됩니다.</p></div>
-<h3>AI (Gemini)</h3><div><label class="f" style="margin-top:0">Gemini API 키 — aistudio.google.com 에서 무료로 받습니다<input id="s_gkey" type="password" value="${esc(s.gkey || '')}" placeholder="AIza…"></label><label class="f">모델 이름<input id="s_gmodel" value="${esc(s.gmodel || 'gemini-flash-latest')}"></label><div class="btns"><button class="btn pri" data-act="aiSave">저장</button></div><p class="hint" style="margin-bottom:0">AI는 버튼을 누를 때만 부릅니다. 잠금 영역의 생각은 잠금을 연 상태에서만 AI에 보냅니다.</p></div>
+${IP ? '<div class="btns" style="margin-top:0"><button class="btn pri" data-act="install">이 기기에 앱으로 설치</button></div>' : ''}
+<h3>AI</h3><p class="dim">정리·분류는 Gemini, 세 관점 평가와 주간 회고는 Claude, 질문과 만트라는 Grok이 먼저 맡습니다. 키가 없거나 막히면 다음 AI가 대신합니다.</p>
+${Object.entries(PROV).map(([p, P]) => `<div class="line"><label class="f">${P.name} 키${P.paid ? '' : ' (무료)'}<input id="k_${p}" type="password" autocomplete="off" value="${esc(s[P.key] || '')}" placeholder="${p === 'gemini' ? 'AIza…' : p === 'claude' ? 'sk-ant-…' : 'xai-…'}"></label><label class="f">모델<input id="m_${p}" value="${esc(s[P.model] || P.def)}"></label></div>`).join('')}
+<label class="f">Claude·Grok 월 한도 (달러)<input id="s_cap" type="number" min="1" step="1" value="${cap()}"></label>
+<div class="prog" style="margin:14px 0 8px"><i style="width:${Math.min(spent() / cap(), 1) * 100}%"></i></div>
+<p class="dim small">이번 달 Claude ${usd(spendOf().claude)}, Grok ${usd(spendOf().grok)}, 합계 ${usd(spent())} / ${usd(cap())}. 응답에 적힌 글자 수(토큰)로 계산한 추정치이며, 한도에 닿으면 Gemini만 씁니다.</p>
+<div class="btns"><button class="btn pri" data-act="aiSave">AI 설정 저장</button></div>
 <h3>알림</h3><div id="notis">${notisHtml(s)}</div>
 <div class="btns"><button class="btn" data-act="notiAdd">＋ 알림 추가</button><button class="btn pri" data-act="pushOn">이 기기에서 알림 켜기</button><button class="btn" data-act="pushTest">테스트</button><button class="btn" data-act="pushOff">이 기기 끄기</button></div>
 <h3>잠금 영역</h3><div><p style="margin:0">가족·건강처럼 사적인 생각은 위쪽 '잠금'을 눌러야 보입니다. ${s.pin ? '비밀번호가 걸려 있습니다.' : '비밀번호는 없습니다.'}</p><div class="btns"><button class="btn" data-act="pinSet">${s.pin ? '비밀번호 바꾸기' : '비밀번호 걸기'}</button>${s.pin ? '<button class="btn" data-act="pinClear">비밀번호 없애기</button>' : ''}</div></div>
@@ -633,7 +711,7 @@ function addPhoto(id, file) {
     put({ id: 'ph_' + id, kind: 'photo', img: c.toDataURL('image/jpeg', 0.72) }, true);
     const t = document.createElement('canvas'), tk = 200 / Math.min(img.width, img.height); t.width = t.height = 200;
     t.getContext('2d').drawImage(img, (200 - img.width * tk) / 2, (200 - img.height * tk) / 2, img.width * tk, img.height * tk);
-    const n = node(id); n.ph = true; n.th = t.toDataURL('image/jpeg', 0.7); B.relKey = ''; put(n); openNode(id); URL.revokeObjectURL(url);
+    const n = node(id); n.ph = true; n.th = t.toDataURL('image/jpeg', 0.7);  put(n); openNode(id); URL.revokeObjectURL(url);
   };
   img.src = url;
 }
@@ -675,9 +753,12 @@ async function vfmImport(manual) {
     }
   }
   for (const [id, x] of Object.entries(src.get('vfm:likes') || {})) add('v_l_' + id, { t: x.t || x.key, k: '자료', g: '좋아요한 글', url: /^https?:/.test(x.u || '') ? x.u : '', at: x.at });
-  if (added) { B.relKey = ''; render(); toast(`자판기에서 ${added}개를 가져왔습니다`, '지도에서 보기', () => go('map')); }
+  if (added) {  render(); toast(`자판기에서 ${added}개를 가져왔습니다`, '지도에서 보기', () => go('map')); }
   else if (manual) toast('자판기에서 새로 가져올 것이 없습니다');
 }
+
+let IP = null;   // 브라우저가 주는 '앱 설치' 기회
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); IP = e; });
 
 // ── 누르기 ───────────────────────────────────────────────────────────
 const ACT = {
@@ -687,13 +768,15 @@ const ACT = {
   toPlanner: () => toPlanner(S.sel), linkAdd: () => openSearch(S.sel), weekly, askQ: () => ask($('#q').value.trim()),
   mantraSave: () => setMantra($('#m_in').value), mantraAi, imgPick: () => openImg(S.sel), fillImages, vfmPull: () => vfmImport(true),
   imgDrop: () => { const n = node(S.sel); delete n.img; delete n.imgSrc; delete n.th; if (n.ph) { n.ph = false; const p = S.items.get('ph_' + n.id); if (p) { p.deleted = true; put(p, true); } } put(n, true); openNode(n.id); render(); },
-  togglePrivate: () => { const n = node(S.sel); n.p = !n.p; put(n, true); B.relKey = ''; if (n.p && !S.unlocked) { toast('잠금 영역으로 옮겼습니다'); closeAll(); } else { openNode(n.id); render(); } },
-  del: () => { if (!confirm('이 생각을 지울까요?')) return; const n = node(S.sel); n.deleted = true; put(n, true); all('link').filter(l => l.a === n.id || l.b === n.id).forEach(l => { l.deleted = true; put(l, true); }); B.relKey = ''; toast('생각을 지웠습니다'); closeAll(); },
-  linkType: el => { const l = S.items.get(el.dataset.id); l.r = l.r === 'contra' ? 'rel' : 'contra'; l.by = 'me'; put(l, true); B.relKey = ''; openNode(S.sel); },
-  linkDel: el => { const l = S.items.get(el.dataset.id); l.deleted = true; put(l, true); B.relKey = ''; openNode(S.sel); },
-  fit: () => fitBoard(true), zin: () => zoomAt(1.3), zout: () => zoomAt(1 / 1.3), relToggle: () => { B.rel = !B.rel; render(); }, replay,
-  replayGo: () => { go('rel'); setTimeout(replay, 200); },
-  aiSave: () => { const s = settings(); s.gkey = $('#s_gkey').value.trim(); s.gmodel = $('#s_gmodel').value.trim() || 'gemini-flash-latest'; put(s, true); toast('AI 설정을 저장했습니다'); },
+  togglePrivate: () => { const n = node(S.sel); n.p = !n.p; put(n, true);  if (n.p && !S.unlocked) { toast('잠금 영역으로 옮겼습니다'); closeAll(); } else { openNode(n.id); render(); } },
+  del: () => { if (!confirm('이 생각을 지울까요?')) return; const n = node(S.sel); n.deleted = true; put(n, true); all('link').filter(l => l.a === n.id || l.b === n.id).forEach(l => { l.deleted = true; put(l, true); });  toast('생각을 지웠습니다'); closeAll(); },
+  linkType: el => { const l = S.items.get(el.dataset.id); l.r = l.r === 'contra' ? 'rel' : 'contra'; l.by = 'me'; put(l, true);  openNode(S.sel); },
+  linkDel: el => { const l = S.items.get(el.dataset.id); l.deleted = true; put(l, true);  openNode(S.sel); },
+  fit: () => fitBoard(true, true), zin: () => zoomAt(1.3), zout: () => zoomAt(1 / 1.3),
+  another: () => { S.rs = (S.rs || 0) + 1; render(); },
+  chainGo: () => { S.flow = 'chain'; S.chain = S.sel; S.after = () => S.view === 'time' ? render() : go('time'); closeAll(); },
+  install: async () => { if (!IP) return; IP.prompt(); await IP.userChoice; IP = null; history.back(); },
+  aiSave: () => { const s = settings(); for (const [p, P] of Object.entries(PROV)) { s[P.key] = $('#k_' + p).value.trim(); s[P.model] = $('#m_' + p).value.trim() || P.def; } s.cap = Math.max(1, +$('#s_cap').value || 20); put(s, true); toast('AI 설정을 저장했습니다'); },
   notiAdd: () => notiChange(a => a.push({ id: newId().slice(0, 6), kind: 'nudge', time: '18:00', days: [1, 2, 3, 4, 5, 6, 7], on: true })),
   notiDel: el => notiChange(a => a.splice(+el.dataset.id, 1)),
   pushOn, pushOff, pushTest: async () => { if (!sb) return; const { data, error } = await sb.rpc('think_push_test'); toast(error ? '알림을 보내지 못했습니다' : data ? '알림을 보냈습니다' : '알림을 켠 기기가 없습니다'); },
@@ -703,20 +786,25 @@ const ACT = {
   export: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify([...S.items.values()], null, 1)], { type: 'application/json' })); a.download = `thinkingForMe-${ymd()}.json`; a.click(); },
 };
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img]'); if (!t) return;
+  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
   if (B.drag > 8 && t.closest('#bd')) return;   // 보드를 끌다가 손을 뗀 것은 누른 것으로 치지 않음
   const d = t.dataset;
   if (d.act) return ACT[d.act]?.(t);
   if (d.go) return go(d.go);
+  if (d.depth) { S.depth = +d.depth; ls.set('tfm:depth', S.depth); S.open.clear(); ls.set('tfm:open', '[]'); return render(); }
+  if (d.flow) { S.flow = d.flow; ls.set('tfm:flow', d.flow); return render(); }
+  if (d.topic) { S.topic = d.topic; return render(); }
+  if (d.chain != null) { S.chain = d.chain; render(); $('#main').scrollTop = 0; return; }
   if (d.node) return openNode(d.node);
-  if (d.pick) { addLink(S.pick, d.pick); B.relKey = ''; toast('두 생각을 이었습니다'); return history.back(); }
+  if (d.pick) { addLink(S.pick, d.pick);  toast('두 생각을 이었습니다'); return history.back(); }
   if (d.mantra) return setMantra(d.mantra);
-  if (d.img) { const n = node(S.sel); n.img = d.img; n.imgSrc = d.src; n.kw = $('#imgQ').value.trim(); delete n.th; put(n, true); B.relKey = ''; return history.back(); }
+  if (d.img) { const n = node(S.sel); n.img = d.img; n.imgSrc = d.src; n.kw = $('#imgQ').value.trim(); delete n.th; put(n, true);  return history.back(); }
   if (d.day) { const [i, j] = d.day.split(':').map(Number); return notiChange(a => { const ds = new Set(a[i].days || []); ds.has(j) ? ds.delete(j) : ds.add(j); a[i].days = [...ds].sort(); }); }
-  if (d.tog) { const k = d.tog; if (isOpen(k, +d.lvl)) { S.open.add('!' + k); S.open.delete(k); } else { S.open.add(k); S.open.delete('!' + k); } ls.set('tfm:open', JSON.stringify([...S.open]));
+  if (d.tog) { const k = d.tog, opening = !isOpen(k, +d.lvl); if (!opening) { S.open.add('!' + k); S.open.delete(k); } else { S.open.add(k); S.open.delete('!' + k); } ls.set('tfm:open', JSON.stringify([...S.open]));
     const was = B.items.find(i => i.tog === k); render();
     const now = B.items.find(i => i.tog === k);   // 누른 가지가 화면에서 제자리에 있도록 판을 맞춰 옮김
     if (was && now) { B.tx += (was.x - now.x) * B.k; B.ty += (was.y - now.y) * B.k; applyT(); }
+    if (opening) focusOn(k);
   }
 });
 document.addEventListener('change', e => {
@@ -725,11 +813,11 @@ document.addEventListener('change', e => {
   if (t.id === 'photoIn' && t.files[0]) addPhoto(S.sel, t.files[0]);
 });
 document.addEventListener('error', e => { const t = e.target; if (t.tagName === 'IMG' && t.classList.contains('th')) { t.removeAttribute('src'); t.style.visibility = 'hidden'; } }, true);
-$('#depth').addEventListener('input', e => { S.depth = +e.target.value; ls.set('tfm:depth', S.depth); S.open.clear(); ls.set('tfm:open', '[]'); render(); });
 $('#quick').addEventListener('submit', e => { e.preventDefault(); const i = $('#quickIn'); addThought(i.value); i.value = ''; });
 addEventListener('hashchange', () => { if (location.hash === '#review') { history.replaceState(history.state, '', location.pathname); go('review'); } });
 addEventListener('online', flush);
 addEventListener('resize', () => { if ($('#bd')) applyT(); });
+addEventListener('keydown', e => { if (S.view !== 'map' || /INPUT|TEXTAREA/.test(document.activeElement?.tagName) || !$('#sheet').hidden) return; if (e.key === '+' || e.key === '=') zoomAt(1.2); else if (e.key === '-') zoomAt(1 / 1.2); else if (e.key === '0') fitBoard(true, true); });
 addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(); });
 
 // ── 시작: 로그인 → 내 계정 확인 → 불러오기 ────────────────────────────
