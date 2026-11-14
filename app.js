@@ -478,7 +478,7 @@ function drawMap() {
   const { items, wires } = mapItems(); B.items = items;
   $('#main').innerHTML = `<div id="bd"><div id="world"><svg id="wires">${wires.join('')}</svg>${items.map(i => { const tag = i.node || i.tog || i.act ? 'button' : 'div'; return `<${tag} class="nd ${i.cls}" style="left:${i.x.toFixed(0)}px;top:${i.y.toFixed(0)}px;width:${i.w.toFixed(0)}px;height:${i.h.toFixed(0)}px;${i.st || ''}"${i.node ? ` data-node="${i.node}"` : ''}${i.tog ? ` data-tog="${esc(i.tog)}" data-lvl="${i.lvl}"` : ''}${i.act ? ` data-act="${i.act}"` : ''}>${i.html}</${tag}>`; }).join('')}</div></div>
 <p class="bdhint">${matchMedia('(pointer:coarse)').matches ? '끌어서 이동, 두 손가락으로 확대. 가지를 누르면 펼쳐집니다.' : '끌어서 이동, 휠로 확대. 가지를 누르면 펼쳐집니다.'}</p>
-<div class="bdui"><button data-act="fit">전체</button><button data-act="zout" aria-label="축소">−</button><span id="zoomPct"></span><button data-act="zin" aria-label="확대">+</button></div>`;
+<div class="bdui">${innerWidth < 700 ? '<button data-act="mapPhone">간단히</button>' : ''}<button data-act="fit">전체</button><button data-act="zout" aria-label="축소">−</button><span id="zoomPct"></span><button data-act="zin" aria-label="확대">+</button></div>`;
   const bd = $('#bd');
   bd.addEventListener('pointerdown', e => { B.ptr.set(e.pointerId, [e.clientX, e.clientY]); if (B.ptr.size === 1) B.drag = 0; B.pinch = 0; });
   bd.addEventListener('wheel', e => {
@@ -531,6 +531,39 @@ addEventListener('pointermove', e => {
 const ptrEnd = e => { B.ptr.delete(e.pointerId); B.pinch = 0; };
 addEventListener('pointerup', ptrEnd); addEventListener('pointercancel', ptrEnd);
 
+// ── 폰 지도: 한 번에 한 단계씩, 가운데 원에서 둘레의 원으로 들어가는 '궤도' 지도 ──
+// 나의 생각 → 대분류 → 주제 → 생각. 원을 누르면 그 안으로 들어가고, 뒤로가기나 위쪽 경로로 나옵니다.
+function orbitData() {
+  const ns = nodes(), [c, g] = S.mpath ||= [], group = (l, k) => { const m = new Map(); l.forEach(n => { if (!m.has(n[k])) m.set(n[k], []); m.get(n[k]).push(n); }); return [...m].sort((a, b) => b[1].length - a[1].length); };
+  if (!c || !ns.some(n => n.c === c)) { S.mpath = []; return { lvl: 0, t: '나의 생각', n: ns.length, col: 'var(--ink)', kids: group(ns, 'c').map(([k, l]) => ({ key: k, t: k, n: l.length, col: colOf(k), l })) }; }
+  const lc = ns.filter(n => n.c === c);
+  if (!g || !lc.some(n => n.g === g)) { S.mpath = [c]; return { lvl: 1, t: c, n: lc.length, col: colOf(c), kids: group(lc, 'g').map(([k, l]) => ({ key: k, t: k, n: l.length, col: colOf(c), l })) }; }
+  const lg = lc.filter(n => n.g === g).sort((a, b) => (b.n || 1) - (a.n || 1) || byNew(a, b));
+  return { lvl: 2, t: g, n: lg.length, col: colOf(c), kids: lg.map(n => ({ node: n, t: S.depth <= 1 ? n.w || n.t : n.t, col: colOf(c) })) };
+}
+function viewOrbit() {
+  const D = orbitData(), all_ = D.kids, more = all_.length > 14 ? all_.length - 13 : 0, kids = more ? all_.slice(0, 13) : all_;
+  const two = kids.length + (more ? 1 : 0) > 8, n1 = two ? Math.ceil((kids.length + (more ? 1 : 0)) * 0.4) : kids.length + (more ? 1 : 0);
+  const pos = i => { const ring = i < n1 ? 0 : 1, k = ring ? i - n1 : i, cnt = ring ? kids.length + (more ? 1 : 0) - n1 : n1, r = two ? (ring ? 41 : 24) : 35, a = -Math.PI / 2 + (k + (ring ? 0.5 : 0)) / cnt * 2 * Math.PI;
+    return { x: 50 + r * Math.cos(a), y: 50 + r * Math.sin(a), s: two ? (ring ? 16.5 : 18) : 22 }; };
+  const P = [...kids, ...(more ? [{ more }] : [])].map((k, i) => ({ ...k, ...pos(i), i }));
+  const crumbs = ['나의 생각', ...S.mpath];
+  return `<nav class="crumb">${crumbs.map((x, i) => i === crumbs.length - 1 ? `<b>${esc(x)}</b>` : `<button data-mto="${i}">${esc(x)}</button><i>›</i>`).join('')}</nav>
+<div class="orb" style="--col:${D.col}">
+<svg class="orb-l" viewBox="0 0 100 100" aria-hidden="true">${P.map(p => `<line x1="50" y1="50" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" stroke="${p.more ? 'var(--line)' : p.col}" stroke-width=".5" stroke-opacity=".6"/>`).join('')}</svg>
+<button class="oc" style="width:${two ? 22 : 30}%" ${D.lvl ? 'data-mto="' + (D.lvl - 1) + '" aria-label="한 단계 위로"' : 'disabled'}>${esc(D.t)}<small>${D.n}개</small></button>
+${P.map(p => { const st = `left:${p.x.toFixed(1)}%;top:${p.y.toFixed(1)}%;width:${p.s}%;--c:${p.col || 'var(--dim)'};--d:${p.i}`;
+    if (p.more) return `<a class="ob" style="${st}" href="#orbList"><span>+${p.more}</span><small>아래 목록</small></a>`;
+    if (p.node) { const n = p.node, im = pic(n); return `<button class="ob${im ? ' ph' : ''}" style="${st}" data-node="${n.id}">${im ? `<img src="${esc(im)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}<span>${esc(p.t)}</span>${(n.n || 1) > 1 ? `<small>${n.n}번</small>` : ''}</button>`; }
+    return `<button class="ob" style="${st}" data-mk="${esc(p.key)}"><span>${esc(p.t)}</span><small>${p.n}</small></button>`; }).join('')}
+</div>
+<p class="dim small" style="text-align:center;margin:2px 0 0">${D.lvl < 2 ? '원을 누르면 안으로 들어갑니다. 뒤로가기로 나옵니다.' : '원을 누르면 그 생각이 열립니다.'}</p>
+<section class="card" id="orbList"><h2>${D.lvl < 2 ? `${esc(D.t)} 안의 ${D.lvl ? '주제' : '분류'} ${all_.length}개` : `${esc(D.t)}의 생각 ${all_.length}개`}</h2>
+${D.lvl < 2 ? all_.map(k => `<button class="item" data-mk="${esc(k.key)}"><span class="th tile" style="background:${pal(D.lvl ? S.mpath[0] : k.key)[0]};color:${k.col};font-size:15px">${k.n}</span><span class="rb"><b>${esc(k.t)}</b>${S.depth >= 2 ? `<span class="meta"><span>${esc([...k.l].sort(byNew)[0].t)}</span></span>` : ''}</span></button>`).join('') : all_.map(k => card(k.node)).join('')}</section>
+<div style="text-align:center;margin-top:14px"><button class="lnk" data-act="mapFull">크게 펼친 지도로 보기</button></div>`;
+}
+function orbitTo(i) { const k = (S.mpath || []).length - i; if (k > 0) { S.popN = k; history.go(-k); } }
+
 // ── 화면 그리기와 뒤로가기 ────────────────────────────────────────────
 // 뒤로가기는 "창 닫기 → 이전 화면 → 첫 화면" 순서로만 움직이고 사이트 밖으로 나가지 않습니다.
 const NAV = [], SH = [];
@@ -541,11 +574,11 @@ function render() {
   document.querySelectorAll('#depthSeg button').forEach(b => b.classList.toggle('on', +b.dataset.depth === S.depth));
   $('#lockBtn').classList.toggle('on', S.unlocked); $('#lockBtn').setAttribute('aria-label', S.unlocked ? '잠금 영역 닫기' : '잠금 영역 열기');
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.go === S.view));
-  const board = S.view === 'map';
+  const phoneMap = S.view === 'map' && innerWidth < 700 && !S.mapFull, board = S.view === 'map' && !phoneMap;
   $('#main').className = board ? 'board' : ''; $('#app').classList.toggle('wide', board);
   if (board) return drawMap();
   const top = $('#main').scrollTop;
-  $('#main').innerHTML = S.view === 'todo' ? viewTodo() : S.view === 'time' ? viewTime() : S.view === 'review' ? viewReview() : viewHome();
+  $('#main').innerHTML = phoneMap ? viewOrbit() : S.view === 'todo' ? viewTodo() : S.view === 'time' ? viewTime() : S.view === 'review' ? viewReview() : viewHome();
   $('#main').scrollTop = top;
 }
 const stamp = () => history.pushState({ tfm: NAV.length }, '');
@@ -566,7 +599,7 @@ addEventListener('popstate', () => {
   while (n-- > 0) {
     const e = NAV.pop();
     if (e === undefined) { stamp(); if (S.view !== 'home') { S.view = 'home'; } else toast('첫 화면입니다', null, null, 1500); break; }
-    if (e === 'sheet') SH.pop(); else S.view = e;
+    if (e === 'sheet') SH.pop(); else if (e === 'lvl') (S.mpath ||= []).pop(); else S.view = e;
   }
   S.pick = null;
   if (SH.length) SH[SH.length - 1](); else $('#sheet').hidden = true;
@@ -1089,6 +1122,7 @@ async function reloadAll() {
 
 window.ACT = {
   refresh: reloadAll,
+  mapFull: () => { S.mapFull = true; render(); }, mapPhone: () => { S.mapFull = false; render(); },
   theme: () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; ls.set('tfm:theme', t); },
   close: closeAll, back: () => history.back(), search: () => openSearch(), settings: openSettings, lock: toggleLock, mantra: openMantra,
   edit: () => editNode(S.sel), save: () => saveNode(S.sel), organize: () => organize(S.sel), persp: () => perspectives(S.sel),
@@ -1132,10 +1166,12 @@ window.ACT = {
   export: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify([...S.items.values()], null, 1)], { type: 'application/json' })); a.download = `thinkingForMe-${ymd()}.json`; a.click(); },
 };
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-tdone],[data-bdone],[data-tk],[data-bk],[data-tsched],[data-top],[data-picktop],[data-tcat],[data-tday],[data-tmode],[data-calm],[data-cald],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
+  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-mk],[data-mto],[data-tdone],[data-bdone],[data-tk],[data-bk],[data-tsched],[data-top],[data-picktop],[data-tcat],[data-tday],[data-tmode],[data-calm],[data-cald],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
   if (B.drag > 8 && t.closest('#bd')) return;   // 보드를 끌다가 손을 뗀 것은 누른 것으로 치지 않음
   const d = t.dataset;
   if (d.act) return window.ACT[d.act]?.(t);
+  if (d.mk) { (S.mpath ||= []).push(d.mk); NAV.push('lvl'); stamp(); render(); $('#main').scrollTop = 0; return; }
+  if (d.mto != null) return orbitTo(+d.mto);
   if (d.tdone) { const t = S.items.get(d.tdone); return t && setDone(t, t.st !== 'done'); }
   if (d.bdone) { const b = S.items.get(d.bdone); if (!b) return; b.done = !b.done; put(b, true); gSoon(); if (SH.at(-1)?.key === 'sched') history.back(); return render(); }
   if (d.tk) return openTask(d.tk);
