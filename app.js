@@ -135,8 +135,8 @@ function charge(p, inT, outT) {
   if (before < c && now >= c) toast(`이번 달 한도 ${usd(c)}에 닿아 Claude·Grok은 멈추고 Gemini만 씁니다`);
 }
 const parseJ = t => { const s = String(t), a = s.indexOf('{'), b = s.lastIndexOf('}'); return JSON.parse(a >= 0 ? s.slice(a, b + 1) : s); };
-async function call(p, prompt) {
-  const P = PROV[p], s = settings(), key = s[P.key], model = s[P.model] || P.def, ac = new AbortController(), tm = setTimeout(() => ac.abort(), 45000);
+async function call(p, prompt, mdl) {
+  const P = PROV[p], s = settings(), key = s[P.key], model = mdl || s[P.model] || P.def, ac = new AbortController(), tm = setTimeout(() => ac.abort(), 45000);
   let res;
   try {
     if (p === 'gemini') res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
@@ -157,30 +157,46 @@ async function call(p, prompt) {
 }
 async function gem(prompt, task = 'organize') {
   const s = settings(), over = spent() >= cap();
-  const order = (ROUTE[task] || ROUTE.organize).filter(p => s[PROV[p].key] && !(PROV[p].paid && over));
+  // 키가 있는 AI를 모두 줄 세움. Gemini는 모델마다 무료 한도가 따로라 여러 모델을 차례로 써 봄
+  const order = (ROUTE[task] || ROUTE.organize).filter(p => s[PROV[p].key] && !(PROV[p].paid && over))
+    .flatMap(p => p === 'gemini' ? [...new Set([s.gmodel || PROV.gemini.def, ...GEM_ALT])].map(m => [p, m]) : [[p, null]]);
   if (!order.length) { toast('AI를 쓰려면 설정에 AI 키를 먼저 넣어 주세요', '설정 열기', openSettings); throw new Error('nokey'); }
   const fails = [];
-  for (const p of order) {
+  for (const [p, mdl] of order) {
     try {
-      const r = await call(p, prompt); charge(p, r.inT, r.outT);
+      let r;
+      try { r = await call(p, prompt, mdl); }
+      catch (e) { if (!/한도|45초/.test(e.message)) throw e; await new Promise(z => setTimeout(z, 2500)); r = await call(p, prompt, mdl); }   // 잠깐 막힌 것은 한 번 더
+      charge(p, r.inT, r.outT);
       let out; try { out = parseJ(r.text); } catch { throw new Error(`${PROV[p].name}의 답을 읽지 못했습니다`); }
       if ((NEED[task] || []).some(k => !out[k])) throw new Error(`${PROV[p].name}의 답이 비어 있습니다`);
       out._by = PROV[p].name;
-      if (fails.length) toast(`${fails.map(f => f.split(' ')[0]).join(', ')} 대신 ${out._by}가 했습니다`);
+      if (fails.length && fails.some(f => !f.startsWith(out._by))) toast(`${[...new Set(fails.map(f => f.split(/[ 의가]/)[0]))].filter(x => x !== out._by).join(', ') || '앞의 AI'} 대신 ${out._by}가 했습니다`);
       return out;
-    } catch (e) { fails.push(String(e.message || e)); console.warn(p, e); }
+    } catch (e) { fails.push(String(e.message || e)); console.warn(p, mdl, e); }
   }
-  throw new Error(fails.length > 1 ? 'AI가 모두 실패했습니다. ' + fails.join(' / ') : fails[0]);
+  const err = new Error([...new Set(fails)].join(' / ')); err.busy = fails.every(f => /한도|45초|연결|답하지/.test(f)); throw err;
 }
 const gemT = (task, prompt) => gem(prompt, task);
+const GEM_ALT = ['gemini-flash-lite-latest', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 const RUN = new Set();   // 지금 AI가 하고 있는 일 (같은 일을 두 번 누르지 않게)
 async function busy(label, fn, key) {
   key ||= label;
   if (RUN.has(key)) return toast('이미 하고 있습니다. 끝나면 알려 드립니다.');
   RUN.add(key); markBusy();
-  const t = toast(label + '. 다른 화면을 봐도 됩니다.', null, null, 120000);
-  try { return await fn(); } catch (e) { if (e.message !== 'nokey') toast(e.message || 'AI가 답하지 못했습니다. 다시 눌러 주세요.', null, null, 9000); console.warn(e); }
-  finally { t.remove(); RUN.delete(key); markBusy(); }
+  const t = toast(label + '. 다른 화면을 봐도 됩니다.', null, null, 600000);
+  try {
+    for (let n = 0; ; n++) {
+      try { return await fn(); }
+      catch (e) {
+        if (e.message === 'nokey') return;
+        if (!e.busy || n >= 3) { toast('지금 쓸 수 있는 AI가 답하지 못했습니다. ' + e.message, null, null, 10000); console.warn(e); return; }
+        t.textContent = `AI들이 잠시 붐벼서 1분 뒤 알아서 다시 합니다 (${n + 1}/3). 끝나면 알려 드립니다.`;
+        await new Promise(z => setTimeout(z, 60000));
+        t.textContent = label + '. 다른 화면을 봐도 됩니다.';
+      }
+    }
+  } finally { t.remove(); RUN.delete(key); markBusy(); }
 }
 // 단추 글자를 '하는 중'으로 바꿔 둠 (창을 다시 그려도 유지)
 function markBusy() {
