@@ -681,6 +681,7 @@ async function vfmImport(manual) {
 
 // ── 누르기 ───────────────────────────────────────────────────────────
 const ACT = {
+  theme: () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; ls.set('tfm:theme', t); },
   close: closeAll, back: () => history.back(), search: () => openSearch(), settings: openSettings, lock: toggleLock, mantra: openMantra,
   edit: () => editNode(S.sel), save: () => saveNode(S.sel), organize: () => organize(S.sel), persp: () => perspectives(S.sel),
   toPlanner: () => toPlanner(S.sel), linkAdd: () => openSearch(S.sel), weekly, askQ: () => ask($('#q').value.trim()),
