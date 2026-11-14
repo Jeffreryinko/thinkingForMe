@@ -1,5 +1,5 @@
 // 서비스 워커: 홈 화면 앱으로 열기 + 폰 알림 표시
-const VER = 'tfm-v1';
+const VER = 'tfm-v2';
 const SHELL = ['./', './index.html', './app.css', './app.js', './config.js', './manifest.webmanifest', './icons/icon-192.png'];
 self.addEventListener('install', e => e.waitUntil(caches.open(VER).then(c => c.addAll(SHELL).catch(() => {})).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('tfm-') && k !== VER).map(k => caches.delete(k)))).then(() => self.clients.claim())));
