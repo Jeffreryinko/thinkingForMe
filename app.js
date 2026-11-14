@@ -1067,7 +1067,7 @@ addEventListener('beforeinstallprompt', e => { e.preventDefault(); IP = e; });
 // ── 누르기 ───────────────────────────────────────────────────────────
 // 새로고침: 서버의 최신 기록·자판기·구글 일정을 다시 받고, 사이트가 새로 바뀌었으면 화면을 새로 엶
 let rfBusy = false;
-async function refresh() {
+async function reloadAll() {
   if (rfBusy) return; rfBusy = true; $('#rfBtn')?.classList.add('spin');
   try {
     const reg = await navigator.serviceWorker?.getRegistration().catch(() => null);
@@ -1084,11 +1084,11 @@ async function refresh() {
   const m = () => $('#main');
   addEventListener('touchstart', e => { y0 = m() && !m().classList.contains('board') && m().scrollTop <= 0 && $('#sheet').hidden && m().contains(e.target) ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
   addEventListener('touchmove', e => { if (y0 == null) return; dy = e.touches[0].clientY - y0; m().style.transform = dy > 0 ? `translateY(${Math.min(dy, 120) / 2}px)` : ''; }, { passive: true });
-  addEventListener('touchend', () => { if (y0 == null) return; m().style.transform = ''; if (dy > 90) refresh(); y0 = null; });
+  addEventListener('touchend', () => { if (y0 == null) return; m().style.transform = ''; if (dy > 90) reloadAll(); y0 = null; });
 })();
 
 window.ACT = {
-  refresh,
+  refresh: reloadAll,
   theme: () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; ls.set('tfm:theme', t); },
   close: closeAll, back: () => history.back(), search: () => openSearch(), settings: openSettings, lock: toggleLock, mantra: openMantra,
   edit: () => editNode(S.sel), save: () => saveNode(S.sel), organize: () => organize(S.sel), persp: () => perspectives(S.sel),
