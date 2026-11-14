@@ -575,11 +575,12 @@ const openSettings = () => show('settings', drawSettings);
 function drawSettings() {
   const s = settings();
   sheet(`<h2>설정</h2>
-<div><b>${esc(S.user.email || '')}</b><div class="btns"><button class="btn" data-act="logout">로그아웃</button><a class="btn" href="${CFG.planner}">플래너 열기</a><a class="btn" href="${CFG.quest}">한 달 퀘스트</a></div><p class="hint" style="margin-bottom:0">자판기·플래너와 로그인을 함께 씁니다. 여기서 로그아웃하면 그쪽도 로그아웃됩니다.</p></div>
+<div><b>${esc(S.user.email || '')}</b><div class="btns"><button class="btn" data-act="logout">로그아웃</button><a class="btn" href="${CFG.vending}">자판기 열기</a><a class="btn" href="${CFG.planner}">플래너 열기</a><a class="btn" href="${CFG.quest}">한 달 퀘스트</a></div><p class="hint" style="margin-bottom:0">자판기·플래너와 로그인을 함께 씁니다. 여기서 로그아웃하면 그쪽도 로그아웃됩니다.</p></div>
 <h3>AI (Gemini)</h3><div><label class="f" style="margin-top:0">Gemini API 키 — aistudio.google.com 에서 무료로 받습니다<input id="s_gkey" type="password" value="${esc(s.gkey || '')}" placeholder="AIza…"></label><label class="f">모델 이름<input id="s_gmodel" value="${esc(s.gmodel || 'gemini-flash-latest')}"></label><div class="btns"><button class="btn pri" data-act="aiSave">저장</button></div><p class="hint" style="margin-bottom:0">AI는 버튼을 누를 때만 부릅니다. 잠금 영역의 생각은 잠금을 연 상태에서만 AI에 보냅니다.</p></div>
 <h3>알림</h3><div id="notis">${notisHtml(s)}</div>
 <div class="btns"><button class="btn" data-act="notiAdd">＋ 알림 추가</button><button class="btn pri" data-act="pushOn">이 기기에서 알림 켜기</button><button class="btn" data-act="pushTest">테스트</button><button class="btn" data-act="pushOff">이 기기 끄기</button></div>
 <h3>잠금 영역</h3><div><p style="margin:0">가족·건강처럼 사적인 생각은 위쪽 '잠금'을 눌러야 보입니다. ${s.pin ? '비밀번호가 걸려 있습니다.' : '비밀번호는 없습니다.'}</p><div class="btns"><button class="btn" data-act="pinSet">${s.pin ? '비밀번호 바꾸기' : '비밀번호 걸기'}</button>${s.pin ? '<button class="btn" data-act="pinClear">비밀번호 없애기</button>' : ''}</div></div>
+<h3>자판기</h3><p class="hint">자판기에서 남긴 생각, 질문, 메모, 별표와 좋아요한 글을 '자판기에서' 가지로 가져옵니다. 열 때마다 새 것만 자동으로 들어옵니다.</p><div class="btns"><button class="btn" data-act="vfmPull">지금 가져오기</button></div>
 <h3>그림</h3><p class="hint">그림이 없는 생각에 위키미디어 공용의 자유 이용 사진을 하나씩 붙입니다. 마음에 안 드는 것은 생각을 열어 바꿀 수 있습니다.</p><div class="btns"><button class="btn" data-act="fillImages">그림 없는 생각에 사진 붙이기</button></div>
 <h3>기록</h3><div class="btns"><button class="btn" data-act="export">전체 기록 내려받기 (JSON)</button></div>
 <p class="hint">폰에 설치: 안드로이드 Chrome 메뉴 → 앱 설치 · 아이폰 Safari 공유 → 홈 화면에 추가. 알림은 설치한 앱에서 켭니다.</p>`);
@@ -637,12 +638,53 @@ function addPhoto(id, file) {
   img.src = url;
 }
 
+// ── 자판기와 잇기 ─────────────────────────────────────────────────────
+// 자판기에서 남긴 생각·질문·메모·별표·좋아요를 생각으로 가져옵니다 (읽기만 함, 자판기 기록은 그대로).
+// 같은 주소(jeffreryinko.github.io)라 이 기기의 자판기 기록을 바로 읽고, 다른 기기 것은 자판기가 올려 둔 서버 칸(kv)에서 읽습니다.
+const VFM_APPS = { ai: 'AI 소식', history: '역사', tools: '도구', deal: '딜', brain: '뇌', book: '책', sisa: '시사' };
+async function vfmImport(manual) {
+  const src = new Map(), mergeV = (a, b) => Array.isArray(a) && Array.isArray(b) ? [...new Map([...a, ...b].filter(x => x && x.id).map(x => [x.id, x])).values()] : a && b && typeof a === 'object' && typeof b === 'object' ? { ...a, ...b } : (b ?? a);
+  if (sb) try {
+    const rs = await Promise.all(['vfm:box:%', 'vfm:%:star', 'vfm:%:memo', 'vfm:likes'].map(pat => sb.from('kv').select('k,v').like('k', pat)));
+    rs.forEach(r => (r.data || []).forEach(x => src.set(x.k, x.v)));
+  } catch (e) { console.warn(e); }
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (/^vfm:(box:(qs|think)|[a-z]+:(star|memo)|likes)$/.test(k)) try { src.set(k, mergeV(src.get(k), JSON.parse(localStorage.getItem(k)))); } catch { /* 깨진 값은 건너뜀 */ }
+  }
+  let added = 0;
+  const C = '자판기에서';
+  const add = (id, o) => {
+    id = id.slice(0, 80); if (S.items.has(id) || !o.t) return;
+    const url = o.url || '';
+    put({ id, kind: 'node', n: 1, st: 0, src: 'vfm', c: C, s: '', ...o, t: String(o.t).slice(0, 140), w: String(o.w || o.t).split(/\s+/)[0].slice(0, 8), at: o.at || Date.now(), ...(!o.img && yt(url) ? { img: yt(url) } : {}) }, true);
+    added++;
+  };
+  const qs = new Map((src.get('vfm:box:qs') || []).map(q => [q.id, q]));
+  for (const q of qs.values()) add('v_q_' + q.id, { t: q.t, k: '생각', g: '붙잡고 있는 질문', raw: q.t, at: q.at });
+  for (const t of src.get('vfm:box:think') || []) {
+    const parts = [t.f && '발견: ' + t.f, t.a && '내 일에 적용: ' + t.a, t.x && '틀렸다는 증거: ' + t.x].filter(Boolean);
+    add('v_t_' + t.id, { t: t.f || t.a || t.x, k: '생각', g: qs.get(t.q)?.t || '읽다가 든 생각', raw: parts.join('\n'), s: t.title ? '읽은 글: ' + t.title : '', url: /^https?:/.test(t.url || '') ? t.url : '', at: t.at });
+  }
+  for (const [k, v] of src) {
+    const m = k.match(/^vfm:([a-z]+):star$/); if (!m || !v || typeof v !== 'object') continue;
+    const app = m[1], memos = src.get(`vfm:${app}:memo`) || {};
+    for (const [id, x] of Object.entries(v)) {
+      const it = x?.item || {}, memo = memos[id] || x?.memo || '';
+      add(`v_s_${app}_${id}`, { t: it.ko || it.t || it.title || id, k: memo ? '의견' : '자료', g: '별표한 ' + (VFM_APPS[app] || app), s: it.ksum || it.one || it.sum || (it.a ? '지은이: ' + it.a : ''), raw: memo || '', url: /^https?:/.test(it.url || '') ? it.url : '', img: /^https?:/.test(it.img || '') ? it.img : /^https?:/.test(it.cv || '') ? it.cv : '', at: x?.at });
+    }
+  }
+  for (const [id, x] of Object.entries(src.get('vfm:likes') || {})) add('v_l_' + id, { t: x.t || x.key, k: '자료', g: '좋아요한 글', url: /^https?:/.test(x.u || '') ? x.u : '', at: x.at });
+  if (added) { B.relKey = ''; render(); toast(`자판기에서 ${added}개를 가져왔습니다`, '지도에서 보기', () => go('map')); }
+  else if (manual) toast('자판기에서 새로 가져올 것이 없습니다');
+}
+
 // ── 누르기 ───────────────────────────────────────────────────────────
 const ACT = {
   close: closeAll, back: () => history.back(), search: () => openSearch(), settings: openSettings, lock: toggleLock, mantra: openMantra,
   edit: () => editNode(S.sel), save: () => saveNode(S.sel), organize: () => organize(S.sel), persp: () => perspectives(S.sel),
   toPlanner: () => toPlanner(S.sel), linkAdd: () => openSearch(S.sel), weekly, askQ: () => ask($('#q').value.trim()),
-  mantraSave: () => setMantra($('#m_in').value), mantraAi, imgPick: () => openImg(S.sel), fillImages,
+  mantraSave: () => setMantra($('#m_in').value), mantraAi, imgPick: () => openImg(S.sel), fillImages, vfmPull: () => vfmImport(true),
   imgDrop: () => { const n = node(S.sel); delete n.img; delete n.imgSrc; delete n.th; if (n.ph) { n.ph = false; const p = S.items.get('ph_' + n.id); if (p) { p.deleted = true; put(p, true); } } put(n, true); openNode(n.id); render(); },
   togglePrivate: () => { const n = node(S.sel); n.p = !n.p; put(n, true); B.relKey = ''; if (n.p && !S.unlocked) { toast('잠금 영역으로 옮겼습니다'); closeAll(); } else { openNode(n.id); render(); } },
   del: () => { if (!confirm('이 생각을 지울까요?')) return; const n = node(S.sel); n.deleted = true; put(n, true); all('link').filter(l => l.a === n.id || l.b === n.id).forEach(l => { l.deleted = true; put(l, true); }); B.relKey = ''; toast('생각을 지웠습니다'); closeAll(); },
@@ -702,7 +744,8 @@ async function start(user) {
   render();
   try { await pull(); } catch (e) { console.warn(e); toast('서버에서 불러오지 못했습니다. 이 기기에 저장해 둔 것을 보여 드립니다.'); }
   opened(); render(); flush();
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && opened()) pull().then(render).catch(() => {}); });
+  vfmImport();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && opened()) pull().then(render).then(() => vfmImport()).catch(() => {}); });
 }
 async function boot() {
   if ('serviceWorker' in navigator && !TEST) navigator.serviceWorker.register('sw.js').catch(() => {});
