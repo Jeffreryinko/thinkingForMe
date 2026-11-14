@@ -143,3 +143,8 @@ h3{font-size:13px;margin:22px 0 8px;color:var(--dim);font-weight:700}
 .toast button{margin-left:12px;color:var(--hl);font-weight:700}
 @media (min-width:700px){.brand{display:inline}.depth{max-width:340px}.bar{gap:10px}#main:not(.board){padding:36px max(28px,calc(50vw - 430px)) 60px}.pgrid{grid-template-columns:repeat(4,1fr)}.tabs{justify-content:center}.tabs button{flex:0 0 110px}}
 @media (prefers-reduced-motion:no-preference){.sheet-box{animation:up .18s ease-out}@keyframes up{from{transform:translateY(24px);opacity:.6}}}
+
+/* 띄어쓰기(줄바꿈): 낱말 단위로 끊되 아주 긴 주소·영문은 넘치지 않게, 문단 끝 외톨이 글자 방지, 제목은 고르게 */
+html,body{overflow-wrap:break-word}
+p,li{text-wrap:pretty}
+h1,h2,h3{text-wrap:balance}
