@@ -119,6 +119,7 @@ const PROV = {
 };
 // 일마다 먼저 부를 순서: 자주 하는 정리는 무료 Gemini, 깊게 따져야 하는 평가·회고는 Claude, 짧은 질문·만트라는 Grok
 const ROUTE = { organize: ['gemini', 'grok', 'claude'], judge: ['claude', 'grok', 'gemini'], weekly: ['claude', 'gemini', 'grok'], ask: ['grok', 'gemini', 'claude'], mantra: ['grok', 'gemini', 'claude'] };
+const NEED = { organize: ['t'], judge: ['inv', 'cus', 'com'], weekly: ['text'], ask: ['answer'], mantra: ['list'] };   // 답에 꼭 있어야 하는 칸
 const month = () => ymd().slice(0, 7);
 const usd = v => '$' + (+v || 0).toFixed(2);
 const spendOf = () => settings().spend?.[month()] || {};
@@ -135,19 +136,19 @@ function charge(p, inT, outT) {
 }
 const parseJ = t => { const s = String(t), a = s.indexOf('{'), b = s.lastIndexOf('}'); return JSON.parse(a >= 0 ? s.slice(a, b + 1) : s); };
 async function call(p, prompt) {
-  const P = PROV[p], s = settings(), key = s[P.key], model = s[P.model] || P.def;
+  const P = PROV[p], s = settings(), key = s[P.key], model = s[P.model] || P.def, ac = new AbortController(), tm = setTimeout(() => ac.abort(), 45000);
   let res;
   try {
     if (p === 'gemini') res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.4 } }) });
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.4 } }), signal: ac.signal });
     else if (p === 'claude') res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-      body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt + '\n\n다른 말 없이 JSON 하나만 출력하라.' }] }) });
+      body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt + '\n\n다른 말 없이 JSON 하나만 출력하라.' }] }), signal: ac.signal });
     else res = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-      body: JSON.stringify({ model, temperature: 0.4, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: prompt }] }) });
-  } catch { throw new Error(`${P.name}에 연결하지 못했습니다`); }
+      body: JSON.stringify({ model, temperature: 0.4, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: prompt }] }), signal: ac.signal });
+  } catch (e) { throw new Error(e.name === 'AbortError' ? `${P.name}가 45초 안에 답하지 않았습니다` : `${P.name}에 연결하지 못했습니다`); } finally { clearTimeout(tm); }
   if (!res.ok) throw new Error(res.status === 401 || res.status === 403 ? `${P.name} 키가 맞지 않습니다. 설정에서 확인해 주세요` : res.status === 429 ? `${P.name} 사용 한도를 넘었습니다. 잠시 뒤 다시 눌러 주세요` : res.status === 400 || res.status === 404 ? `${P.name} 모델 이름(${model})을 설정에서 확인해 주세요` : `${P.name}가 답하지 못했습니다 (${res.status})`);
   const j = await res.json();
   if (p === 'gemini') return { text: (j.candidates?.[0]?.content?.parts || []).map(x => x.text || '').join('') };
@@ -158,19 +159,46 @@ async function gem(prompt, task = 'organize') {
   const s = settings(), over = spent() >= cap();
   const order = (ROUTE[task] || ROUTE.organize).filter(p => s[PROV[p].key] && !(PROV[p].paid && over));
   if (!order.length) { toast('AI를 쓰려면 설정에 AI 키를 먼저 넣어 주세요', '설정 열기', openSettings); throw new Error('nokey'); }
-  let last;
+  const fails = [];
   for (const p of order) {
-    try { const r = await call(p, prompt); charge(p, r.inT, r.outT); const out = parseJ(r.text); out._by = PROV[p].name; return out; }
-    catch (e) { last = e; console.warn(p, e); }
+    try {
+      const r = await call(p, prompt); charge(p, r.inT, r.outT);
+      let out; try { out = parseJ(r.text); } catch { throw new Error(`${PROV[p].name}의 답을 읽지 못했습니다`); }
+      if ((NEED[task] || []).some(k => !out[k])) throw new Error(`${PROV[p].name}의 답이 비어 있습니다`);
+      out._by = PROV[p].name;
+      if (fails.length) toast(`${fails.map(f => f.split(' ')[0]).join(', ')} 대신 ${out._by}가 했습니다`);
+      return out;
+    } catch (e) { fails.push(String(e.message || e)); console.warn(p, e); }
   }
-  throw last;
+  throw new Error(fails.length > 1 ? 'AI가 모두 실패했습니다. ' + fails.join(' / ') : fails[0]);
 }
 const gemT = (task, prompt) => gem(prompt, task);
-async function busy(label, fn) {
-  const t = toast(label, null, null, 60000);
-  try { return await fn(); } catch (e) { if (e.message !== 'nokey') toast(e.message || 'AI가 답하지 못했습니다. 다시 눌러 주세요.'); console.warn(e); }
-  finally { t.remove(); }
+const RUN = new Set();   // 지금 AI가 하고 있는 일 (같은 일을 두 번 누르지 않게)
+async function busy(label, fn, key) {
+  key ||= label;
+  if (RUN.has(key)) return toast('이미 하고 있습니다. 끝나면 알려 드립니다.');
+  RUN.add(key); markBusy();
+  const t = toast(label + '. 다른 화면을 봐도 됩니다.', null, null, 120000);
+  try { return await fn(); } catch (e) { if (e.message !== 'nokey') toast(e.message || 'AI가 답하지 못했습니다. 다시 눌러 주세요.', null, null, 9000); console.warn(e); }
+  finally { t.remove(); RUN.delete(key); markBusy(); }
 }
+// 단추 글자를 '하는 중'으로 바꿔 둠 (창을 다시 그려도 유지)
+function markBusy() {
+  document.querySelectorAll('[data-act]').forEach(b => {
+    const k = { organize: 'org:' + S.sel, persp: 'judge:' + S.sel, weekly: 'weekly', mantraAi: 'mantra', askQ: 'ask' }[b.dataset.act];
+    if (!k) return;
+    if (!b.dataset.label) b.dataset.label = b.textContent;
+    const on = RUN.has(k); b.classList.toggle('loading', on); b.textContent = on ? '하는 중…' : b.dataset.label;
+  });
+}
+// 끝났음을 알림: 화면 위 알림 + 앱이 뒤에 있으면 폰 알림
+function done(msg, open) {
+  toast(msg, open ? '보기' : null, open, 8000);
+  if (document.hidden && 'Notification' in window && Notification.permission === 'granted')
+    navigator.serviceWorker?.ready.then(r => r.showNotification('thinkingForMe', { body: msg, tag: 'tfm-ai', icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', data: { url: './' } })).catch(() => {});
+}
+// 결과가 나온 생각의 창이 열려 있으면 다시 그리고, 아니면 알림의 '보기'로 열게 함
+const refresh = id => { if (SH.length && SH[SH.length - 1].key === 'node:' + id) SH[SH.length - 1](); else render(); };
 const groupsText = () => [...new Set(all('node').map(n => `${n.c} > ${n.g}`))].join('\n');
 
 async function organize(id) {
@@ -187,7 +215,7 @@ ${n.raw || n.t}
 ${groupsText()}
 
 [후보]
-${cand}`));
+${cand}`), 'org:' + id);
   if (!r) return;
   (n.hist ||= []).push({ at: Date.now(), t: n.t, s: n.s });
   Object.assign(n, {
@@ -196,8 +224,8 @@ ${cand}`));
   });
   for (const l of r.links || []) if (node(l.id) && l.id !== id) addLink(id, l.id, l.r === 'contra' ? 'contra' : 'rel', l.why, 'ai');
   if (!pic(n) && n.kw) try { const im = (await commons(n.kw, 3))[0]; if (im) { n.img = im.th; n.imgSrc = im.page; } } catch { /* 그림은 없어도 됨 */ }
-   put(n); openNode(id);
-  toast('정리했습니다. 틀린 연결은 눌러서 고칠 수 있습니다.');
+  put(n); refresh(id);
+  done(`${r._by}가 '${n.t.length > 18 ? n.t.slice(0, 17).trim() + '…' : n.t}'을 정리했습니다`, () => openNode(id));
 }
 async function perspectives(id) {
   const n = node(id); if (!n) return;
@@ -205,11 +233,12 @@ async function perspectives(id) {
 형식: {"inv":"투자자가 볼 것(시장·수익·위험)","cus":"고객이 느낄 것(쓸 이유·안 쓸 이유)","com":"경쟁자가 볼 것(이미 있는 것·빈틈)","need":"이 생각이 건드리는 사람들의 욕구와 그 강도, 누가 얼마나 절실한지(추정임을 밝힐 것)","needs":["${NEEDS.join('","')}" 중 0~3개]}
 
 [구상] ${n.t}
-${n.s || ''} ${n.d || ''}`));
+${n.s || ''} ${n.d || ''}`), 'judge:' + id);
   if (!r) return;
   n.v = { inv: r.inv, cus: r.cus, com: r.com, need: r.need, by: r._by, at: Date.now() };
   if (r.needs?.length) n.needs = r.needs.filter(x => NEEDS.includes(x));
-  put(n); openNode(id);
+  put(n); refresh(id);
+  done(`${r._by}가 '${n.t.length > 18 ? n.t.slice(0, 17).trim() + '…' : n.t}' 평가를 마쳤습니다`, () => openNode(id));
 }
 const corpus = () => nodes().map(n => `${n.id}|${n.t}|${(n.s || '').slice(0, 90)}`).join('\n');
 
@@ -285,7 +314,7 @@ ${rep.length ? `<section class="card"><h2>자주 돌아오는 생각</h2>${rep.m
 // ── 흐름: 날짜순 · 주제별 · 줄기 ───────────────────────────────────────
 function viewTime() {
   const m = S.flow || 'date';
-  return `<div class="seg sub">${[['date', '날짜순'], ['topic', '주제별'], ['chain', '줄기']].map(([k, l]) => `<button data-flow="${k}" class="${m === k ? 'on' : ''}">${l}</button>`).join('')}</div>` + (m === 'topic' ? flowTopic() : m === 'chain' ? flowChain() : flowDate());
+  return `<div class="seg sub">${[['date', '날짜순'], ['cal', '달력'], ['topic', '주제별'], ['chain', '줄기']].map(([k, l]) => `<button data-flow="${k}" class="${m === k ? 'on' : ''}">${l}</button>`).join('')}</div>` + (m === 'topic' ? flowTopic() : m === 'chain' ? flowChain() : m === 'cal' ? flowCal() : flowDate());
 }
 function flowDate() {
   const ns = nodes().sort(byNew), d = S.depth, by = new Map();
@@ -293,6 +322,23 @@ function flowDate() {
   return [...by].map(([k, list]) => `<section class="card"><div class="hd"><h2>${k}</h2><span class="dim">${list.length}개</span></div>${d <= 1
     ? `<div class="words">${list.map(n => `<button style="background:${pal(n.c)[0]};color:${pal(n.c)[1]}" data-node="${n.id}">${esc(n.w || n.t)}</button>`).join('')}</div>`
     : list.map(n => card(n)).join('')}</section>`).join('') || '<p class="empty">아직 적은 생각이 없습니다.</p>';
+}
+function flowCal() {
+  const ns = nodes(), by = new Map();
+  ns.forEach(n => { const k = ymd(new Date(n.at)); if (!by.has(k)) by.set(k, []); by.get(k).push(n); });
+  const today = ymd(), cm = S.calM || today.slice(0, 7), [Y, M] = cm.split('-').map(Number);
+  const first = new Date(Y, M - 1, 1), days = new Date(Y, M, 0).getDate(), max = Math.max(3, ...[...by].filter(([k]) => k.startsWith(cm)).map(([, l]) => l.length));
+  const sel = S.calD && S.calD.startsWith(cm) ? S.calD : (by.has(today) && today.startsWith(cm) ? today : [...by.keys()].filter(k => k.startsWith(cm)).sort().pop());
+  const cells = [...Array(first.getDay())].map(() => '<span></span>').concat([...Array(days)].map((_, i) => {
+    const k = `${cm}-${String(i + 1).padStart(2, '0')}`, l = by.get(k) || [], pc = l.find(pic);
+    return `<button class="cd${k === sel ? ' on' : ''}${k === today ? ' td' : ''}" data-cald="${k}"${l.length ? ` style="--a:${(0.12 + 0.5 * l.length / max).toFixed(2)}"` : ''}>${pc && S.depth >= 3 ? `<img src="${esc(pic(pc))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}<b>${i + 1}</b>${l.length ? `<i>${l.length}</i>` : ''}</button>`;
+  }));
+  const list = (by.get(sel) || []).sort(byNew), todo = P.ok ? [...P.rows.values()].filter(r => r.kind === 'task' && (r.data.due === sel || (r.data.doneAt && ymd(new Date(r.data.doneAt)) === sel))) : [];
+  return `<section class="card"><div class="hd"><button class="lnk" data-calm="-1" aria-label="이전 달">‹ 이전</button><h2 style="margin:0">${Y}년 ${M}월</h2><button class="lnk" data-calm="1" aria-label="다음 달">다음 ›</button></div>
+<div class="calw">${'일월화수목금토'.split('').map(d => `<span>${d}</span>`).join('')}</div><div class="cal">${cells.join('')}</div>
+<p class="dim small" style="margin-top:10px">이번 달 ${[...by].filter(([k]) => k.startsWith(cm)).reduce((s, [, l]) => s + l.length, 0)}개. 색이 진할수록 그날 생각을 많이 적었습니다.</p></section>
+${sel ? `<section class="card"><h2>${fmtDay(new Date(sel).getTime())} ${'일월화수목금토'[new Date(sel).getDay()]}요일</h2>${list.map(n => card(n)).join('') || '<p class="dim">이날 적은 생각이 없습니다.</p>'}
+${todo.length ? `<h3 style="margin:18px 0 6px;font-size:15px">이날의 할 일</h3>${todo.map(r => `<p class="dim" style="margin:6px 0">${r.data.st === 'done' ? '✓ ' : '· '}${esc(r.data.title)}${r.data.cat === 1 ? ' (119)' : ''}</p>`).join('')}` : ''}</section>` : ''}`;
 }
 function flowTopic() {
   const groups = new Map();
@@ -356,8 +402,8 @@ async function weekly() {
   const r = await busy('이번 주를 돌아보는 중입니다', () => gemT('weekly', `한 사람이 이번 주에 적은 생각 목록이다. 주간 회고를 JSON으로만 답하라. 한국어, 존댓말. 지어내지 말고 목록에 있는 내용만 근거로.
 형식: {"text":"회고 본문. 첫 문단: 이번 주 생각이 흐른 방향 2~3문장. 둘째 문단: 반복되거나 서로 부딪힌 생각. 셋째 문단: 다음 주에 실행으로 옮길 만한 한 가지. 문단은 빈 줄로 구분."}
 
-${week.map(n => `- [${n.k}] ${n.t} : ${(n.s || '').slice(0, 120)}${(n.n || 1) > 1 ? ` (${n.n}번)` : ''}`).join('\n')}`));
-  if (r?.text) put({ id: 'rev:' + weekKey(), kind: 'review', text: String(r.text), by: r._by, at: Date.now() });
+${week.map(n => `- [${n.k}] ${n.t} : ${(n.s || '').slice(0, 120)}${(n.n || 1) > 1 ? ` (${n.n}번)` : ''}`).join('\n')}`), 'weekly');
+  if (r?.text) { put({ id: 'rev:' + weekKey(), kind: 'review', text: String(r.text), by: r._by, at: Date.now() }); done(`${r._by}가 이번 주 회고를 썼습니다`, () => go('review')); }
 }
 
 // ── 지도: 가운데 '나의 생각'에서 왼쪽·오른쪽으로 퍼지는 마인드맵 ────────────
@@ -512,7 +558,7 @@ addEventListener('popstate', () => {
 });
 
 // ── 창(아래에서 올라오는 시트) ────────────────────────────────────────
-function sheet(html) { $('#sheetBox').innerHTML = html; $('#sheet').hidden = false; $('#sheetBox').scrollTop = 0; }
+function sheet(html) { $('#sheetBox').innerHTML = html; setTimeout(markBusy); $('#sheet').hidden = false; $('#sheetBox').scrollTop = 0; }
 function toast(msg, act, fn, ms = 5000) {
   const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
   if (act) { const b = document.createElement('button'); b.textContent = act; b.onclick = () => { el.remove(); fn(); }; el.append(b); }
@@ -587,7 +633,7 @@ async function ask(q) {
 [질문] ${q}
 
 [목록]
-${corpus()}`));
+${corpus()}`), 'ask');
   if (!r || !$('#ans')) return;
   $('#ans').innerHTML = `<div class="ans">${esc(r.answer)}</div>`;
   $('#res').innerHTML = (r.ids || []).map(node).filter(vis).map(n => card(n, 3)).join('');
@@ -603,7 +649,7 @@ const openMantra = () => show('mantra', () => {
 async function mantraAi() {
   const r = await busy('후보 문장을 뽑는 중입니다', () => gemT('mantra', `아래는 한 사람이 직접 한 생각들이다. 이 사람이 매일 되뇔 만한 문장 후보 5개를 그 사람의 말투와 내용에서 뽑아라. 각 30자 이내, 지어내지 말고 생각에 근거. JSON으로만: {"list":["...","..."]}
 
-${nodes().filter(n => n.k !== '자료').sort((a, b) => (b.n || 1) - (a.n || 1) || byNew(a, b)).slice(0, 60).map(n => `- ${n.t}${(n.n || 1) > 1 ? ` (${n.n}번)` : ''}`).join('\n')}`));
+${nodes().filter(n => n.k !== '자료').sort((a, b) => (b.n || 1) - (a.n || 1) || byNew(a, b)).slice(0, 60).map(n => `- ${n.t}${(n.n || 1) > 1 ? ` (${n.n}번)` : ''}`).join('\n')}`), 'mantra');
   if (r?.list && $('#mlist')) $('#mlist').innerHTML = r.list.map(mantraBtn).join('');
 }
 const setMantra = t => { const s = settings(); s.mantra = t.trim(); s.mantraFrom = nodes().find(n => n.t === s.mantra)?.id || ''; put(s, true); toast('되뇔 문장을 정했습니다'); history.back(); };
@@ -828,11 +874,13 @@ const ACT = {
   export: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify([...S.items.values()], null, 1)], { type: 'application/json' })); a.download = `thinkingForMe-${ymd()}.json`; a.click(); },
 };
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-pdone],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
+  const t = e.target.closest('[data-act],[data-node],[data-go],[data-tog],[data-pick],[data-mantra],[data-day],[data-img],[data-pdone],[data-calm],[data-cald],[data-depth],[data-flow],[data-topic],[data-chain]'); if (!t) return;
   if (B.drag > 8 && t.closest('#bd')) return;   // 보드를 끌다가 손을 뗀 것은 누른 것으로 치지 않음
   const d = t.dataset;
   if (d.act) return ACT[d.act]?.(t);
   if (d.pdone) { const r = P.rows.get(d.pdone); if (!r) return; if (d.kind === 'block') return plannerPut(r.id, 'block', { done: !r.data.done }); const done = r.data.st === 'done'; return plannerPut(r.id, 'task', { st: done ? 'open' : 'done', doneAt: done ? null : Date.now() }); }
+  if (d.calm) { const [y, m] = (S.calM || ymd().slice(0, 7)).split('-').map(Number), t = new Date(y, m - 1 + +d.calm, 1); S.calM = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`; S.calD = ''; return render(); }
+  if (d.cald) { S.calD = d.cald; return render(); }
   if (d.go) return go(d.go);
   if (d.depth) { S.depth = +d.depth; ls.set('tfm:depth', S.depth); S.open.clear(); ls.set('tfm:open', '[]'); return render(); }
   if (d.flow) { S.flow = d.flow; ls.set('tfm:flow', d.flow); return render(); }
