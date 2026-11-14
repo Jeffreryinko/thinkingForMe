@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>thinkingForMe</title>
+<meta name="description" content="내 생각·의견·사업구상을 심플부터 세세하게까지">
+<meta name="theme-color" content="#090b1a">
+<meta name="robots" content="noindex">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="gate" hidden></div>
+<div id="app" hidden>
+  <header class="bar">
+    <div class="brand"><i class="logo"></i><span>thinkingForMe</span></div>
+    <div class="depth" title="깊이: 심플 ↔ 세세"><span>심플</span><input id="depth" type="range" min="1" max="5" step="1" aria-label="깊이"><span>세세</span><b id="depthName"></b></div>
+    <button class="ib" data-act="search" aria-label="검색">🔍</button>
+    <button class="ib" id="lockBtn" data-act="lock" aria-label="잠금 영역">🔒</button>
+    <button class="ib" data-act="settings" aria-label="설정">⚙️</button>
+  </header>
+  <main id="main"></main>
+  <canvas id="sky" hidden></canvas>
+  <div id="skyUi" hidden><button data-act="replay">▶ 성장 재생</button><button data-act="fit">전체 보기</button><span id="skyDate"></span></div>
+  <form id="quick" autocomplete="off"><input id="quickIn" placeholder="지금 떠오른 생각 한 줄" maxlength="500" enterkeyhint="send"><button aria-label="적기">＋</button></form>
+  <nav class="tabs">
+    <button data-go="home"><i>✦</i>오늘</button>
+    <button data-go="graph"><i>✺</i>우주</button>
+    <button data-go="map"><i>⌥</i>가지</button>
+    <button data-go="time"><i>⌇</i>흐름</button>
+    <button data-go="review"><i>◔</i>회고</button>
+  </nav>
+</div>
+<div id="sheet" hidden><div class="sheet-bg" data-act="close"></div><div class="sheet-box" id="sheetBox"></div></div>
+<div id="toasts" aria-live="polite"></div>
+<noscript>자바스크립트가 켜져 있어야 동작합니다.</noscript>
+<script src="config.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
