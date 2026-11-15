@@ -314,6 +314,7 @@ function viewHome() {
   return `<section class="hello"><p class="date">${now.getMonth() + 1}월 ${now.getDate()}일 ${'일월화수목금토'[now.getDay()]}요일</p>
 <h1 class="mantra"><span>${esc(s.mantra || '오늘 되뇔 한 문장을 골라 보세요')}</span></h1>
 <p class="by">${src ? `${fmtDay(src.at)}에 내가 한 말` : '내가 고른 문장'}<button class="lnk" data-act="mantra">바꾸기</button></p></section>
+${window.VFM_UNIV ? window.VFM_UNIV.html() : ''}
 ${todoCard()}
 ${worksStrip()}
 <section class="card"><div class="hd"><h2>오늘 ${used}번 열었어요</h2><span class="dim">${used >= 5 ? '오늘 목표를 채웠어요' : `5번까지 ${5 - used}번`}</span></div>
