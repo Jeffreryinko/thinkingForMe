@@ -88,6 +88,6 @@ Claude·Grok은 응답의 토큰 수로 금액을 추정해 `settings.spend[YYYY
 
 생각을 열어 **✅ 플래너로** 를 누르면 `planner_items` 에 할 일(`task`, 태그 `생각`)이 바로 들어갑니다. 한 달 퀘스트는 그 기기 브라우저에만 저장되는 구조라 바로가기만 있습니다.
 
-## 주현 대학 카드 (2026-11-15)
+## univ. 카드 (2026-11-15)
 
-홈 만트라 아래에 자판기의 '주현 대학' 오늘 수업 카드가 보입니다. 계산은 `/vendingForMe/assets/univ.js` 하나가 하고(같은 주소라 기기 기록을 그대로 읽음), 여기서는 `VFM_UNIV.html()`을 끼워 넣기만 합니다. 누르면 https://jeffreryinko.github.io/vendingForMe/univ/ 로 갑니다.
+홈 만트라 아래에 자판기의 'univ.' 오늘 수업 카드가 보입니다. 계산은 `/vendingForMe/assets/univ.js` 하나가 하고(같은 주소라 기기 기록을 그대로 읽음), 여기서는 `VFM_UNIV.html()`을 끼워 넣기만 합니다. 누르면 https://jeffreryinko.github.io/vendingForMe/univ/ 로 갑니다.
