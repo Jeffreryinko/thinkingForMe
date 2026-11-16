@@ -42,7 +42,8 @@
   function touch(k) { rec(k).t = Date.now(); }
 
   /* ---------- 계산 ---------- */
-  function score(r) { return r ? (r.work ? 2 : 0) + (r.sleep ? 2 : 0) + (r.dry ? 1 : 0) + (+r.pub || 0) * 10 + (+r.react || 0) * 5 + ((+r.rev || 0) > 0 ? 50 : 0) : 0; }
+  function score(r, k) { return r ? (r.work ? 2 : 0) + (r.sleep ? 2 : 0) + (r.dry ? 1 : 0) + (+r.pub || 0) * 10 + (+r.react || 0) * 5 + (+r.rej || 0) * 3 + ((+r.rev || 0) > 0 ? 50 : 0) + (k && k === firstPay() ? 300 : 0) : 0; }
+  function firstPay() { var ks = Object.keys(S.log).filter(function (k) { return (+S.log[k].rev || 0) > 0; }).sort(); return ks[0] || ""; }
   function total(f) { var t = 0; Object.keys(S.log).forEach(function (k) { t += f(S.log[k], k); }); return t; }
   // 만든 날 연속: 쉬어도 되는 날(아이 아픔·가족 멈춤)은 건너뜀, 이틀 연속 빠지면 끊김
   function streak(field) {
@@ -50,7 +51,7 @@
     for (var i = 0; i < 400; i++) {
       var r = S.log[key(d)];
       if (r && r[field]) { n++; gap = 0; }
-      else if (r && r.ex && field === "work") { /* 쉬는 날 */ }
+      else if (r && (r.ex || r.frz) && field === "work") { /* 쉬는 날·보호권 */ }
       else if (field === "dry") { if (i > 0) break; }
       else { if (i > 0) gap++; if (gap >= 2) break; }
       d = addDays(d, -1);
@@ -59,11 +60,12 @@
   }
   function stats() {
     return {
-      score: total(score), days: total(function (r) { return r.work ? 1 : 0; }), sleep: total(function (r) { return r.sleep ? 1 : 0; }),
+      score: total(score), rej: total(function (r) { return +r.rej || 0; }), frz: frzLeft(), days: total(function (r) { return r.work ? 1 : 0; }), sleep: total(function (r) { return r.sleep ? 1 : 0; }),
       pub: total(function (r) { return +r.pub || 0; }), react: total(function (r) { return +r.react || 0; }), rev: total(function (r) { return +r.rev || 0; }),
       dryDays: total(function (r) { return r.dry ? 1 : 0; }), streak: streak("work"), dry: streak("dry")
     };
   }
+  function frzLeft() { var m = TK.slice(0, 7); return 2 - Object.keys(S.log).filter(function (k) { return k.slice(0, 7) === m && S.log[k].frz; }).length; }
   function ladder() { // 공개 사다리: 그 칸 과제를 한 날 자동 표시
     var done = {};
     for (var d = 1; d <= N; d++) { var r = S.log[dkey(d)]; if (!r || !r.work) continue; var x = P.day(d), m = /\[사다리 (\d)칸\]/.exec(x.task);
@@ -77,11 +79,12 @@
     return [best > 0, maxRun >= 30, best >= 1000, best >= 10000, mBest >= 1000000, false, mBest >= 5000000];
   }
   // 그날 과제에 맞는 토론 안건(0부터)·교본 장(0부터)·만화
-  var CTX = [[/인터뷰|템플릿|답장/, 6, 1], [/광고/, 7, 3], [/결제|가격|환불/, 7, 3], [/사다리|공개|올린다|올리고/, 5, 5], [/채널/, 5, 4], [/점검/, 2, 14],
-    [/게임|한 판/, 2, 11], [/불편|비교표|검색어|후기|1억/, 1, 0], [/v1|기능 하나|만든다|첫 버전/, 0, 2], [/고장|코드/, 8, 12], [/최소 버전|성탄절|새해|가벼운/, 9, 13]];
+  // [과제 글귀, 100차 토론 안건 번호(0부터), 교본 장(0부터)]
+  var CTX = [[/예약|소개 한 장/, 23, 0], [/v1|첫 버전|만든다/, 32, 2], [/인터뷰|템플릿|답장/, 37, 1], [/광고/, 75, 3], [/결제|가격|환불/, 22, 3], [/사다리|공개|올린다|올리고/, 60, 5], [/채널/, 25, 4], [/점검/, 88, 14],
+    [/게임|한 판/, 27, 11], [/불편|비교표|검색어|후기|1억|중간 판정/, 20, 0], [/기능 하나/, 31, 2], [/고장|코드/, 33, 12], [/최소 버전|성탄절|새해|가벼운/, 13, 13]];
   function ctx(x) {
     for (var i = 0; i < CTX.length; i++) if (CTX[i][0].test(x.task)) return { round: CTX[i][1], ch: CTX[i][2] };
-    return { round: 0, ch: 2 };
+    return { round: 5, ch: 2 };
   }
   function comicFor(d, wd) { return wd === 0 ? 9 : [0, 1, 2, 3, 4, 5, 7, 8][(d - 1) % 8]; }
   var GATE_DAY = [11, 25, 30, 60, 90];
@@ -102,6 +105,12 @@
       "<text x='38' y='37' text-anchor='middle' font-size='15' font-weight='800'>" + esc(label) + "</text><text x='38' y='52' text-anchor='middle' font-size='9.5' fill='var(--dim)'>" + esc(sub) + "</text></svg>";
   }
 
+  /* ---------- 타이머 (25분, 화면에만) ---------- */
+  var T = { end: 0, id: 0 };
+  function tmrText() { if (!T.end) return "25분 타이머 시작"; var s = Math.max(0, Math.round((T.end - Date.now()) / 1000)); return "남은 " + Math.floor(s / 60) + ":" + ("0" + s % 60).slice(-2) + " · 누르면 멈춤"; }
+  function tmrTick() { var b = $("#tmr"); if (b) b.textContent = tmrText(); if (T.end && Date.now() >= T.end) { T.end = 0; clearInterval(T.id); toast("25분 끝. 5분 쉬고, 멈출 거면 다음 첫 줄을 적고 멈춰요"); try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (e) {} if (b) b.textContent = tmrText(); } }
+  function tmrToggle() { if (T.end) { T.end = 0; clearInterval(T.id); } else { T.end = Date.now() + 25 * 60e3; T.id = setInterval(tmrTick, 1000); } tmrTick(); }
+
   /* ---------- 오늘 ---------- */
   function mode(x) { return x.wk[2] === "지금대로" ? "night" : "dawn"; }
   function flowItems(x) {
@@ -120,28 +129,36 @@
     if (DN > N) return viewFinished();
     var x = P.day(DN), r = rec(TK), st = stats(), c = ctx(x), rd = D.ROUNDS[c.round], ch = D.BOOK[c.ch], n = S.notes[TK] || {};
     var items = flowItems(x), doneN = items.filter(function (i) { return r[i.id]; }).length, gi = GATE_DAY.indexOf(DN);
-    var h = "";
-    h += "<section class='hero'><div><p class='eyebrow'>" + md(TODAY) + " · " + (x.w + 1) + "주 차 " + esc(x.wk[0]) + "</p><h1>" + DN + "일 차</h1><p class='why'>왜 하는가 · <b>가족의 안전</b></p></div>" + ring(DN / N, DN + "/" + N, "남은 " + (N - DN) + "일") + "</section>";
-    h += "<div class='chips'><span class='chip'><b>" + st.streak + "</b>일 연속</span><span class='chip'><b>" + st.score + "</b>점</span><span class='chip'>금주 <b>" + st.dry + "</b>일</span><span class='chip'>오늘 <b>" + doneN + "/" + items.length + "</b></span></div>";
-    if (r.ex) h += "<section class='card soft'><b>오늘은 쉬는 날로 적었어요.</b> " + esc(r.ex) + ". 연속은 끊기지 않아요. <button class='lnk' data-act='unex'>되돌리기</button></section>";
+    var h = "", yk = key(addDays(TODAY, -1)), yn = S.notes[yk] || {}, mon = x.wd === 1 || TODAY.getDate() === 1;
+    h += "<section class='hero'><div><p class='eyebrow'>" + md(TODAY) + " · " + (x.w + 1) + "주 차 " + esc(x.wk[0]) + "</p><h1>" + DN + "일 차</h1><p class='why'>나는 <b>매일 내놓는 사람</b>이다 · 왜: 가족의 안전</p></div>" + ring(DN / N, DN + "/" + N, "남은 " + (N - DN) + "일") + "</section>";
+    h += "<div class='chips'><span class='chip'><b>" + st.streak + "</b>일 연속</span><span class='chip'><b>" + st.score + "</b>점</span><span class='chip'>금주 <b>" + st.dry + "</b>일</span><span class='chip'>보호권 <b>" + st.frz + "</b>장</span><span class='chip'>오늘 <b>" + doneN + "/" + items.length + "</b></span></div>";
+    h += weekDots(x);
+    if (mon) h += "<section class='card soft'><b>새 출발.</b> " + (TODAY.getDate() === 1 ? "새 달의 첫날" : "새 주의 첫날") + "이에요. 지난주는 지난주예요. 오늘 첫 20분만.</section>";
+    h += "<section class='card first'><p class='eyebrow'>어제의 내가 정한 첫 20분</p><p class='f20'>" + (yn.l3 ? esc(yn.l3) : "어제 적은 것이 없어요. 아래 미션의 첫 줄부터 시작해요.") + "</p></section>";
+    if (r.ex || r.frz) h += "<section class='card soft'><b>" + (r.frz ? "오늘은 보호권을 썼어요." : "오늘은 쉬는 날로 적었어요.") + "</b> " + esc(r.ex || "3줄은 꼭 써요") + ". 연속은 끊기지 않아요. <button class='lnk' data-act='unex'>되돌리기</button></section>";
+    var build = x.kind === "도구" && DN >= 15 && DN <= 25, resv = +S.resv || 0;
+    if (DN >= 11 && DN <= 25) h += "<section class='card" + (build && resv < 3 ? " warn" : "") + "'><div class='hd'><h2>예약 " + resv + " / 3건</h2><div class='pm'><button data-act='resv' data-d='-1' aria-label='예약 하나 빼기'>−</button><b>" + resv + "</b><button data-act='resv' data-d='1' aria-label='예약 하나 더하기'>+</button></div></div><p class='dim small'>" + (build && resv < 3 ? "<b>예약 3건 전에는 만들지 않아요.</b> 오늘은 만들기 대신 소개 한 장을 다른 곳에 올리고 예약을 부탁해요. 25일 차까지 안 되면 2순위 불편으로 한 번 바꿔요. 방향 신호이지 내 실패가 아니에요." : "가격을 보인 예약이 3건 모이면 만들기로 넘어가요. (100차 토론 24번)") + "</p></section>";
     if (gi >= 0) h += gateCard(gi, true);
     // 미션
     h += "<section class='card mission'><div class='hd'><span class='tag " + (x.kind === "도구" ? "t-blue" : "t-coin") + "'>" + esc(x.kind) + "</span><span class='dim'>" + esc(x.wd === 0 || x.wd === 6 ? "주말 60분" : x.wk[7] + " · " + x.wk[4] + "분") + "</span></div>" +
-      "<p class='task'>" + esc(x.task) + "</p>" +
+      "<p class='task'>" + esc(x.task) + "</p><p class='endshape'>끝의 모양: 결과물 하나(글·표·파일·화면)가 남으면 끝</p>" +
+      "<button class='tmr' id='tmr' data-act='timer'>" + tmrText() + "</button>" +
       "<button class='big-btn" + (r.work ? " done" : "") + "' data-act='toggle' data-k='work'>" + (r.work ? "✓ 미션 끝냈어요" + (r.min ? " (최소 버전)" : "") : "미션 끝냈어요") + "</button>" +
-      "<details class='why-box'><summary>왜 이걸 하나요 · 토론 " + (c.round + 1) + "번 결론</summary><p>" + esc(rd.res) + "</p><button class='lnk' data-act='round' data-i='" + c.round + "'>토론 전체 보기</button></details>" +
+      "<details class='why-box'><summary>왜 이걸 하나요 · 100차 토론 " + (c.round + 1) + "번</summary><p>" + esc(rd.res) + "</p><button class='lnk' data-act='round' data-i='" + c.round + "'>토론 전체 보기</button></details>" +
       "<details class='why-box'><summary>막히면 · 교본 " + esc(ch[0]) + "</summary><ul>" + ch[1].slice(0, 4).map(function (t) { return "<li>" + esc(t) + "</li>"; }).join("") + "</ul><button class='lnk' data-act='chapter' data-i='" + c.ch + "'>장 전체 보기</button></details></section>";
+    var IF = D.IFS[(DN - 1) % D.IFS.length];
+    h += "<section class='card if'><p class='eyebrow'>오늘의 만약</p><p><b>만약 " + esc(IF[0]) + ",</b> " + esc(IF[1]) + ".</p><button class='lnk' data-act='lib' data-k='ifs'>만약 규칙 10개</button></section>";
     // 하루 흐름
     h += "<section class='card'><div class='hd'><h2>오늘의 흐름</h2><span class='dim'>" + (mode(x) === "night" ? "밤 모드 (1~2주)" : "새벽 모드") + "</span></div><div class='flow'>" +
       items.map(function (i) { return "<button class='fi" + (r[i.id] ? " on" : "") + "' data-act='toggle' data-k='" + i.id + "'><span class='tm'>" + esc(i.t) + "</span><span class='bx'></span><span class='lb'><b>" + esc(i.l) + "</b><small>" + esc(i.s) + "</small></span></button>"; }).join("") + "</div></section>";
     // 숫자
     h += "<section class='card'><h2>오늘의 숫자</h2><div class='steps'>" +
-      stepper("pub", "공개한 것", "+10점") + stepper("react", "모르는 사람 반응", "+5점") +
-      "<label class='rev'><span><b>매출</b><small>결제가 있는 날 +50점</small></span><input type='number' inputmode='numeric' min='0' data-num='rev' value='" + (+r.rev || "") + "' placeholder='0'></label></div></section>";
+      stepper("pub", "공개한 것", "+10점") + stepper("react", "모르는 사람 반응", "+5점") + stepper("rej", "거절 받은 것", "+3점 · 90일 30번이 목표") +
+      "<label class='rev'><span><b>매출</b><small>결제가 있는 날 +50점 · 첫 결제는 +300점</small></span><input type='number' inputmode='numeric' min='0' data-num='rev' value='" + (+r.rev || "") + "' placeholder='0'></label></div></section>";
     // 글
     h += "<section class='card'><div class='hd'><h2>오늘의 글</h2><span class='dim'>" + esc(x.theme) + "</span></div><p class='q'>" + esc(x.q) + "</p>" +
       "<textarea class='ta' rows='3' data-note='a' placeholder='한두 문장이면 충분해요'>" + esc(n.a || "") + "</textarea>" +
-      "<div class='three'><label>만들거나 올린 것<input data-note='l1' value='" + esc(n.l1 || "") + "'></label><label>막힌 것 하나<input data-note='l2' value='" + esc(n.l2 || "") + "'></label><label>내일 첫 20분<input data-note='l3' value='" + esc(n.l3 || "") + "'></label></div>" +
+      "<div class='three'><label>만들거나 올린 것<input data-note='l1' value='" + esc(n.l1 || "") + "'></label><label>막힌 것 하나<input data-note='l2' value='" + esc(n.l2 || "") + "'></label><label>내일 첫 20분 (내일 아침 맨 위에 떠요)<input data-note='l3' value='" + esc(n.l3 || "") + "'></label></div>" +
       "<label class='tick'><input type='checkbox' data-act='mapnote'" + (n.map !== false ? " checked" : "") + "> thinkingForMe 생각 지도에도 넣기</label></section>";
     // 일요일 보고
     if (x.wd === 0 || DN === N) h += weekCard();
@@ -153,24 +170,35 @@
     if (DN < N) { var y = P.day(DN + 1); h += "<section class='card soft'><div class='hd'><h2>내일</h2><span class='dim'>" + md(y.date) + "</span></div><p>" + esc(y.task) + "</p></section>"; }
     return h;
   }
+  function weekDots(x) {
+    var s = "<div class='wdots' aria-label='이번 주 진척'>", start = DN - ((DN - 1) % 7);
+    for (var d = start; d < start + 7 && d <= N; d++) { var st = dayState(d); s += "<span class='" + st + "' title='" + d + "일 차'>" + WD[P.day(d).wd] + "</span>"; }
+    return s + "</div>";
+  }
   function stepper(k, label, sub) {
     var v = +rec(TK)[k] || 0;
     return "<div class='stp'><span><b>" + label + "</b><small>" + sub + "</small></span><div class='pm'><button data-act='step' data-k='" + k + "' data-d='-1' aria-label='" + label + " 하나 빼기'>−</button><b>" + v + "</b><button data-act='step' data-k='" + k + "' data-d='1' aria-label='" + label + " 하나 더하기'>+</button></div></div>";
   }
   function weekSum(endKey) {
-    var W = { sleep: 0, work: 0, pub: 0, rev: 0 }, e = new Date(endKey);
-    for (var i = 0; i < 7; i++) { var r = S.log[key(addDays(e, -i))]; if (r) { if (r.sleep) W.sleep++; if (r.work) W.work++; W.pub += +r.pub || 0; W.rev += +r.rev || 0; } }
-    return W;
+    var W = { sleep: 0, work: 0, pub: 0, react: 0, rej: 0, rev: 0 }, e = new Date(endKey);
+    for (var i = 0; i < 7; i++) { var r = S.log[key(addDays(e, -i))]; if (r) { if (r.sleep) W.sleep++; if (r.work) W.work++; W.pub += +r.pub || 0; W.react += +r.react || 0; W.rej += +r.rej || 0; W.rev += +r.rev || 0; } }
+    W.try = W.pub + W.react + W.rej; return W;
   }
   function weekText() {
     var W = weekSum(TODAY), wk = Math.max(1, Math.floor((DN - 1) / 7) + 1);
-    return "[90일 기록 " + wk + "주차 · " + TK + "]\n① 7시간 잔 날 " + W.sleep + "/7\n② 만든 날 " + W.work + "/7\n③ 공개한 것 " + W.pub + "개\n④ 번 돈 " + won(W.rev) + "\n금주 " + streak("dry") + "일째\n\n잘된 것: \n안 된 것: \n다음 주 한 가지: ";
+    return "[90일 기록 " + wk + "주차 · " + TK + "]\n① 7시간 잔 날 " + W.sleep + "/7\n② 만든 날 " + W.work + "/7\n③ 시도한 것 " + W.try + "번 (공개 " + W.pub + " · 반응 " + W.react + " · 거절 " + W.rej + ")\n④ 번 돈 " + won(W.rev) + "\n금주 " + streak("dry") + "일째\n\n잘된 것: \n막힌 것: \n도움 요청: \n다음 주 한 가지: ";
   }
   function weekCard() {
     var W = weekSum(TODAY);
     return "<section class='card accent'><div class='hd'><h2>일요일 보고</h2><span class='dim'>숫자가 0이어도 올려요</span></div><div class='four'>" +
-      [["7시간 잔 날", W.sleep + "/7"], ["만든 날", W.work + "/7"], ["공개", W.pub + "개"], ["번 돈", won(W.rev)]].map(function (a) { return "<div><b>" + a[1] + "</b><span>" + a[0] + "</span></div>"; }).join("") +
-      "</div><button class='big-btn' data-act='copyweek'>보고 글 복사</button><p class='dim small'>올린 다음 '공개한 것'에 +1을 누르세요.</p></section>";
+      [["7시간 잔 날", W.sleep + "/7"], ["만든 날", W.work + "/7"], ["시도", W.try + "번"], ["번 돈", won(W.rev)]].map(function (a) { return "<div><b>" + a[1] + "</b><span>" + a[0] + "</span></div>"; }).join("") +
+      "</div>" + predBox() + "<button class='big-btn' data-act='copyweek'>보고 글 복사</button><p class='dim small'>올린 다음 '공개한 것'에 +1을 누르세요. 결과 목표(1억)는 쓰지 않고 숫자만 올려요.</p>" +
+      (TODAY.getDate() <= 7 ? "<div class='res'><b>이번 달 첫 일요일: 가족 회의 10분.</b> 숫자 보여 주기, 다음 달 시간 정하기, 멈춤 권리 확인.</div>" : "") + "</section>";
+  }
+  function predBox() {
+    var wkI = Math.floor((DN - 1) / 7), prev = (S.pred || {})[wkI - 1], W = weekSum(TODAY), cur = (S.pred || {})[wkI];
+    return "<div class='pred'>" + (prev != null ? "<p>지난주에 예측한 만든 날 <b>" + prev + "일</b> → 실제 <b>" + W.work + "일</b>" + (W.work < prev ? " · 예측이 컸어요. 이번엔 조금 낮춰 보세요." : " · 잘 맞췄어요.") + "</p>" : "") +
+      "<label>다음 주에 만들 날 예측<select data-pred='" + wkI + "'>" + [0, 1, 2, 3, 4, 5, 6, 7].map(function (n) { return "<option" + (cur === n ? " selected" : "") + ">" + n + "</option>"; }).join("") + "</select></label></div>";
   }
   function gateCard(gi, today) {
     var g = D.GATES[gi];
@@ -181,7 +209,7 @@
   function viewPrestart() {
     var x1 = P.day(1), prep = [["phone", "21시 15분에 폰을 거실 충전기에 꽂는다"], ["paper", "내일 첫 과제를 종이에 적는다"], ["doc", "노트북에 빈 문서를 열어 둔다"], ["bed", "23시에 눕는다"], ["dry", "술은 오늘부터 0잔"], ["doctor", "처방의 예약 날짜를 정한다 (새벽 작업·금주 상의)"]];
     var h = "<section class='hero'><div><p class='eyebrow'>" + md(TODAY) + " · 시작 " + (1 - DN) + "일 전</p><h1>내일 1일 차</h1><p class='why'>왜 하는가 · <b>가족의 안전</b></p></div>" + ring(0, "D-" + (1 - DN), "11/17 시작") + "</section>";
-    h += "<section class='card'><h2>쓰는 법</h2><ol class='how'><li><b>아침이나 출근길</b>에 이 화면을 열고 오늘의 미션을 읽어요.</li><li><b>하루 동안</b> 흐름에 있는 것을 끝낼 때마다 눌러요.</li><li><b>자기 전</b>에 글 칸에 몇 줄 쓰고 숫자를 넣어요. 일요일에는 보고 글을 복사해 올려요.</li></ol><p class='dim small'>막히면 미션 아래 '왜 이걸 하나요'와 '막히면'을 펼치세요. 15인 토론과 교본에서 그날에 맞는 부분만 보여 줘요.</p></section>";
+    h += "<section class='card'><h2>쓰는 법</h2><ol class='how'><li><b>출근길 3분</b>: 어제의 내가 정한 첫 20분과 오늘의 만약을 읽어요.</li><li><b>하루 동안</b> 흐름에 있는 것을 끝낼 때마다 눌러요.</li><li><b>퇴근길이나 자기 전</b>에 3줄을 써요(음성 입력도 돼요). '내일 첫 20분'이 내일 아침 맨 위에 떠요.</li></ol><p class='dim small'>막히면 미션 아래 '왜 이걸 하나요'와 '막히면'을 펼치세요. 100차 토론과 교본에서 그날에 맞는 부분만 보여 줘요.</p></section>";
     h += "<section class='card'><h2>오늘 밤 준비</h2><div class='gl'>" + prep.map(function (p) { return "<label class='tick'><input type='checkbox' data-prep='" + p[0] + "'" + (S.prep[p[0]] ? " checked" : "") + "> " + p[1] + "</label>"; }).join("") + "</div></section>";
     h += "<section class='card mission'><div class='hd'><span class='tag t-blue'>내일 미션</span><span class='dim'>" + esc(x1.wk[7]) + "</span></div><p class='task'>" + esc(x1.task) + "</p></section>";
     h += "<section class='card'><div class='hd'><h2>선언문</h2><button class='lnk' data-act='copypledge'>복사</button></div><div class='pledge'>" + esc(D.PLEDGE) + "</div><p class='dim small'>내일 첫 과제가 이 글을 닉네임 계정에 올리는 거예요. 공개 사다리 2칸입니다.</p></section>";
@@ -223,6 +251,7 @@
     // 돈 사다리
     var M = moneyRung(), rungs = [["첫 결제 1건", "인생 첫 1"], ["매일 100원 × 30일", "우연이 아니라는 증거"], ["하루 1,000원", "구독료를 스스로"], ["하루 1만 원", "아내에게 보여 줄 첫 숫자"], ["월 100만 원", "방향이 맞다는 신호"], ["월 300만 원 × 3개월", "퇴사 검토 지점"], ["월 500만 원", "본인이 정한 기준선"]];
     h += "<h2 class='sec'>돈 사다리</h2><section class='card'><div class='ladder'>" + rungs.map(function (r, i) { return "<div class='lr" + (M[i] ? " on" : "") + (i === 5 ? " gate" : "") + "'><span class='n'>" + (i + 1) + "</span><b>" + r[0] + "</b><small>" + r[1] + "</small></div>"; }).reverse().join("") + "</div><p class='dim small'>매출 칸에 넣은 숫자로 저절로 올라가요. 퇴사 조건은 6칸 + 예비금 6개월 + 아내의 동의.</p></section>";
+    h += "<h2 class='sec'>1억, 두 가지 뜻</h2><section class='card'><div class='dec'><dt>깃발</dt><dd>1년 누적 매출 1억. 12개월 차에 월 3,600만 원. 월 29,000원이면 약 1,240곳.</dd><dt>추적</dt><dd>12개월 차 월 834만 원(연 환산 1억). 월 29,000원이면 약 288곳.</dd></div><p class='dim small'>100차 토론 11번 결론. 어느 쪽인지는 주현 님이 정해요. 그 전까지 둘 다 보여 줘요.</p></section>";
     var f = ART.figs[3]; h += "<section class='card fig'><h2>" + f[0] + "</h2>" + f[1] + "<p class='dim small'>" + f[2] + "</p></section>";
     return h;
   }
@@ -244,8 +273,9 @@
   function viewRecords() {
     var st = stats(), h = "<h1 class='pg'>기록</h1>";
     h += "<section class='card'><div class='four'><div><b>" + st.score + "</b><span>점수</span></div><div><b>" + st.days + "</b><span>만든 날</span></div><div><b>" + st.pub + "</b><span>공개</span></div><div><b>" + won(st.rev) + "</b><span>매출</span></div></div>" +
+      "<div class='four'><div><b>" + st.rej + "/30</b><span>거절</span></div><div><b>" + (st.pub + st.react + st.rej) + "</b><span>굴린 주사위</span></div><div><b>" + st.frz + "</b><span>보호권 남음</span></div><div><b>" + (+S.resv || 0) + "</b><span>예약</span></div></div>" +
       "<div class='four'><div><b>" + st.streak + "</b><span>연속</span></div><div><b>" + st.sleep + "</b><span>7시간 잔 날</span></div><div><b>" + st.dry + "</b><span>금주 연속</span></div><div><b>" + won(st.dryDays * 9000) + "</b><span>아낀 술값</span></div></div>" +
-      "<p class='dim small'>점수: 공개 10 · 모르는 사람 반응 5 · 결제가 있는 날 50 · 만든 날 2 · 7시간 잔 날 2 · 금주 1. 아낀 술값은 금주 하루 9천 원 가정.</p></section>";
+      "<p class='dim small'>점수: 공개 10 · 반응 5 · 거절 3 · 결제가 있는 날 50 · 첫 결제 300 · 만든 날 2 · 7시간 잔 날 2 · 금주 1. 점수는 행동을 돕는 장치일 뿐, 30·60·90일 판정은 매출과 대화 수로 해요. 아낀 술값은 금주 하루 9천 원 가정.</p></section>";
     h += "<section class='card fig'><h2>점수가 쌓이는 모양</h2>" + scoreChart() + "</section>";
     h += "<section class='card fig'><h2>주마다 숫자 넷</h2>" + weekBars() + "</section>";
     var ks = Object.keys(S.notes).filter(function (k) { var n = S.notes[k]; return n && (n.a || n.l1 || n.l2 || n.l3); }).sort().reverse();
@@ -260,7 +290,7 @@
   }
   function scoreChart() {
     var pts = [], cum = 0, last = Math.max(1, Math.min(N, DN));
-    for (var d = 1; d <= last; d++) { cum += score(S.log[dkey(d)]); pts.push(cum); }
+    for (var d = 1; d <= last; d++) { cum += score(S.log[dkey(d)], dkey(d)); pts.push(cum); }
     var mx = Math.max(100, cum), X = function (i) { return 36 + i * (296 / (N - 1)); }, Y = function (v) { return 150 - v / mx * 130; };
     var grid = [0, .5, 1].map(function (f) { var v = Math.round(mx * f); return "<line x1='36' y1='" + Y(v) + "' x2='332' y2='" + Y(v) + "' stroke='var(--line)'/><text x='32' y='" + (Y(v) + 4) + "' text-anchor='end' font-size='10'>" + v + "</text>"; }).join("");
     var xl = [1, 30, 60, 90].map(function (d) { return "<text x='" + X(d - 1) + "' y='168' text-anchor='middle' font-size='10'>" + d + "일</text>"; }).join("");
@@ -281,8 +311,9 @@
   /* ---------- 자료 ---------- */
   var LIB = [
     ["pledge", "선언문", "90일 동안 지킬 약속. 복사해서 올리기"],
-    ["debate", "15인 토론", "안건 10개, 반박과 표결, 결론과 남은 이견"],
-    ["decisions", "최종 결의 12항", "토론으로 정해진 규칙 한 장"],
+    ["debate", "100차 토론", "16명, 10단계 100판. 반박·입장 변경·가중 표결"],
+    ["decisions", "핵심 규칙 7개", "100판을 일곱 줄로"],
+    ["ifs", "만약 규칙 10개", "그 순간이 오면 할 행동"],
     ["book", "교본 18장", "막힐 때 펴 보는 방법서"],
     ["comics", "만화 10장면", "가장 자주 넘어지는 순간들"],
     ["figures", "그림 9장", "고리, 깔때기, 곡선, 로드맵, 흐름도"],
@@ -296,23 +327,28 @@
   function roundHtml(i) {
     var r = D.ROUNDS[i], R = D.ROLES, tot = r.vote.reduce(function (a, v) { return a + v[1]; }, 0), mx = Math.max.apply(null, r.vote.map(function (v) { return v[1]; }));
     function av(id) { var o = R[id]; return "<span class='av" + (o[3] ? " opp" : "") + "' style='--c:" + o[2] + "'>" + o[1] + "</span>"; }
-    return "<p class='eyebrow'>안건 " + (i + 1) + " / 10</p><h2>" + esc(r.t) + "</h2><p class='dim'>" + esc(r.q) + "</p><div class='facts'><b>근거로 쓴 답변</b> · " + esc(r.data) + "</div><div class='thr'>" +
-      r.turns.map(function (t) { var o = R[t[0]]; return "<div class='tn" + (t[0] === "mod" ? " mod" : "") + "'>" + av(t[0]) + "<div class='bb'><div class='who'>" + o[0] + (t[2] ? "<span class='ttag " + (t[2] === "입장 바꿈" ? "입장" : t[2]) + "'>" + t[2] + "</span>" : "") + "</div>" + esc(t[1]) + "</div></div>"; }).join("") +
-      "</div><b>표결 (15명)</b><div class='vote'>" + r.vote.map(function (v) { return "<div class='vr" + (v[1] === mx ? " win" : "") + "'><span>" + esc(v[0]) + "</span><div class='bar'><i style='width:" + (v[1] / tot * 100) + "%'></i></div><b>" + v[1] + "</b></div>"; }).join("") +
-      "</div><div class='res'><b>결론.</b> " + esc(r.res) + "</div><b class='blk'>계획에 반영한 것</b><ul class='plain'>" + r.chg.map(function (c) { return "<li>" + esc(c) + "</li>"; }).join("") + "</ul><p class='dim small'><b>남은 이견.</b> " + esc(r.minor) + "</p>" +
-      "<div class='twin'>" + (i > 0 ? "<button class='ghost' data-act='round' data-i='" + (i - 1) + "'>이전 안건</button>" : "<span></span>") + (i < 9 ? "<button class='ghost' data-act='round' data-i='" + (i + 1) + "'>다음 안건</button>" : "<span></span>") + "</div>";
+    return "<p class='eyebrow'>" + (r.p + 1) + "단계 " + esc(D.PHASES[r.p]) + " · " + (i + 1) + " / 100</p><h2>" + esc(r.t) + "</h2>" + (r.flip ? "<p class='flipline'>뒤집힘: " + esc(r.flip) + "</p>" : "") + "<div class='thr'>" +
+      r.turns.map(function (t) { var o = R[t[0]]; return "<div class='tn" + (t[0] === "mod" ? " mod" : "") + (o[4] ? " loud" : "") + "' style='--c:" + o[2] + "'>" + av(t[0]) + "<div class='bb'><div class='who'>" + (o[4] ? "★ " : "") + o[0] + (t[2] ? "<span class='ttag " + (t[2] === "입장 바꿈" ? "입장" : t[2]) + "'>" + t[2] + "</span>" : "") + "</div>" + esc(t[1]) + "</div></div>"; }).join("") +
+      "</div><b>가중 표결 (20표, ★ 2표씩)</b><div class='vote'>" + r.vote.map(function (v) { return "<div class='vr" + (v[1] === mx ? " win" : "") + "'><span>" + esc(v[0]) + "</span><div class='bar'><i style='width:" + (v[1] / tot * 100) + "%'></i></div><b>" + v[1] + "</b></div>"; }).join("") +
+      "</div><div class='res'><b>결론.</b> " + esc(r.res) + "</div>" + (r.ref ? "<p class='small'><b>앱에 반영:</b> " + esc(r.ref) + "</p>" : "") +
+      "<div class='twin'>" + (i > 0 ? "<button class='ghost' data-act='round' data-i='" + (i - 1) + "'>이전 안건</button>" : "<span></span>") + (i < 99 ? "<button class='ghost' data-act='round' data-i='" + (i + 1) + "'>다음 안건</button>" : "<span></span>") + "</div>";
+  }
+  function phaseSheet(pi) {
+    sheet("<p class='eyebrow'>100차 토론 · " + (pi + 1) + "단계</p><h2>" + esc(D.PHASES[pi]) + "</h2>" + D.ROUNDS.slice(pi * 10, pi * 10 + 10).map(function (r, j) { var i = pi * 10 + j, top = r.vote.slice().sort(function (a, b) { return b[1] - a[1]; })[0]; return "<button class='row' data-act='round' data-i='" + i + "'><span class='no'>" + (i + 1) + "</span><span><b>" + esc(r.t) + "</b><small>" + esc(top[0]) + " " + top[1] + "/20 · " + esc(r.res.slice(0, 46)) + "…</small></span></button>"; }).join("") +
+      "<div class='twin'>" + (pi > 0 ? "<button class='ghost' data-act='phase' data-i='" + (pi - 1) + "'>이전 단계</button>" : "<span></span>") + (pi < 9 ? "<button class='ghost' data-act='phase' data-i='" + (pi + 1) + "'>다음 단계</button>" : "<span></span>") + "</div>");
   }
   function libSheet(k) {
     var h = "";
     if (k === "pledge") h = "<h2>선언문</h2><div class='pledge'>" + esc(D.PLEDGE) + "</div><button class='big-btn' data-act='copypledge'>복사</button>";
     else if (k === "debate") {
       var R = D.ROLES;
-      h = "<h2>15인 토론</h2><p class='dim'>각 분야의 관점을 제가 맡아 진행한 모의 토론입니다. 근거는 주현 님 답변 80여 개. 점선은 처음에 뺐다가 반대 의견을 내도록 다시 부른 역할입니다.</p><div class='ppl'>" +
-        Object.keys(R).filter(function (id) { return id !== "mod"; }).map(function (id) { var o = R[id]; return "<div class='pp'><span class='av" + (o[3] ? " opp" : "") + "' style='--c:" + o[2] + "'>" + o[1] + "</span><span>" + o[0] + "</span></div>"; }).join("") + "</div>" +
-        "<b class='blk'>토론으로 뒤집힌 것</b>" + D.FLIP.map(function (f) { return "<div class='flip'><small>" + esc(f[0]) + "</small><span class='old'>" + esc(f[1]) + "</span><b>→ " + esc(f[2]) + "</b></div>"; }).join("") +
-        "<b class='blk'>안건</b>" + D.ROUNDS.map(function (r, i) { return "<button class='row' data-act='round' data-i='" + i + "'><span class='no'>" + (i + 1) + "</span><span><b>" + esc(r.t) + "</b><small>" + esc(r.res.slice(0, 54)) + "…</small></span></button>"; }).join("");
+      h = "<h2>100차 토론</h2><p class='dim'>16개 역할이 10단계, 100판을 토론했습니다. ★ 인지심리학자·행동과학자·ADHD 임상의·투자 유치 전문가는 목소리를 높여 표결에서 2표씩, 나머지는 1표씩(모두 20표)입니다. 실제 인물이 아니라 각 분야의 관점을 제가 맡아 진행한 모의 토론이고, 근거는 주현 님 답변 80여 개입니다. 점선은 반대 의견을 내도록 일부러 부른 역할입니다.</p><div class='ppl'>" +
+        Object.keys(R).filter(function (id) { return id !== "mod"; }).map(function (id) { var o = R[id]; return "<div class='pp" + (o[4] ? " loud" : "") + "'><span class='av" + (o[3] ? " opp" : "") + "' style='--c:" + o[2] + "'>" + o[1] + "</span><span>" + (o[4] ? "★ " : "") + o[0] + "</span></div>"; }).join("") + "</div>" +
+        "<b class='blk'>100판으로 뒤집힌 것</b>" + D.FLIP.map(function (f) { return "<div class='flip'><small>" + esc(f[0]) + "</small><span class='old'>" + esc(f[1]) + "</span><b>→ " + esc(f[2]) + "</b></div>"; }).join("") +
+        "<b class='blk'>10단계</b>" + D.PHASES.map(function (p, i) { return "<button class='row' data-act='phase' data-i='" + i + "'><span class='no'>" + (i + 1) + "</span><span><b>" + esc(p) + "</b><small>" + (i * 10 + 1) + "~" + (i * 10 + 10) + "번 · " + esc(D.ROUNDS[i * 10].t) + " 외</small></span></button>"; }).join("");
     }
-    else if (k === "decisions") h = "<h2>최종 결의 12항</h2><dl class='dec'>" + D.DEC.map(function (d) { return "<dt>" + esc(d[0]) + "</dt><dd>" + esc(d[1]) + "</dd>"; }).join("") + "</dl><p class='dim small'>아직 답이 필요한 것: 1억이 매출인지 손에 쥐는 돈인지. 지금은 매출로 계산했어요.</p>";
+    else if (k === "ifs") h = "<h2>만약 규칙 10개</h2><p class='dim'>목표만 정하면 잘 안 지켜지고, '만약 ~하면 ~한다'로 미리 정하면 훨씬 잘 지켜진다는 연구가 많아요(100차 토론 41번). 오늘 화면에 매일 하나씩 떠요.</p>" + D.IFS.map(function (f, i) { return "<div class='flip'><small>" + (i + 1) + "</small><b>만약 " + esc(f[0]) + ",</b><span>" + esc(f[1]) + ".</span></div>"; }).join("");
+    else if (k === "decisions") h = "<h2>핵심 규칙 7개</h2><dl class='dec'>" + D.DEC.map(function (d) { return "<dt>" + esc(d[0]) + "</dt><dd>" + esc(d[1]) + "</dd>"; }).join("") + "</dl><p class='dim small'>100판의 결론을 일곱 줄로 줄였어요(95번). 1억의 정의는 아직 주현 님 답이 필요해요. 90일 동안 이 앱에는 기능을 더하지 않아요(94번).</p>";
     else if (k === "book") h = "<h2>교본 18장</h2>" + D.BOOK.map(function (c, i) { return "<button class='row' data-act='chapter' data-i='" + i + "'><span class='no'>" + (i + 1) + "</span><span><b>" + esc(c[0].replace(/^\d+\. /, "")) + "</b><small>" + esc(c[1][0].slice(0, 50)) + "…</small></span></button>"; }).join("");
     else if (k === "comics") h = "<h2>만화 10장면</h2><p class='dim'>파란 옷이 주현 님, 초록 옷이 모르는 사용자, 회색 옷이 동료입니다.</p>" + D.STRIPS.map(function (s, i) { return "<h3>" + (i + 1) + ". " + esc(s[0]) + "</h3>" + ART.strip(s) + "<p class='dim small'>" + esc(s[1]) + "</p>"; }).join("");
     else if (k === "figures") h = "<h2>그림 9장</h2>" + ART.figs.map(function (f) { return "<div class='fig'><h3>" + f[0] + "</h3>" + f[1] + "<p class='dim small'>" + f[2] + "</p></div>"; }).join("");
@@ -324,12 +360,14 @@
 
   /* ---------- 아이디어·무너짐 ---------- */
   function ideaSheet() {
-    sheet("<h2>새 아이디어</h2><p class='dim'>적기만 해요. 2027-02-14까지 시작하지 않아요.</p><textarea id='ideaIn' class='ta' rows='3' placeholder='떠오른 것을 한 줄로'></textarea><input id='ideaWho' class='inp' placeholder='누가 돈을 낼까? (비워도 돼요)'><button class='big-btn' data-act='saveidea'>주차장에 세우기</button><p class='dim small'>thinkingForMe에 로그인돼 있으면 '90일 작전 › 아이디어 주차장' 가지에 구상(씨앗)으로도 들어가요.</p>");
+    sheet("<h2>새 아이디어</h2><p class='dim'>적기만 해요. 2027-02-14까지 시작하지 않아요.</p><textarea id='ideaIn' class='ta' rows='3' placeholder='떠오른 것을 한 줄로'></textarea><input id='ideaWho' class='inp' placeholder='누가 돈을 내나? (꼭 적어요)'><button class='big-btn' data-act='saveidea'>주차장에 세우기</button><p class='dim small'>thinkingForMe에 로그인돼 있으면 '90일 작전 › 아이디어 주차장' 가지에 구상(씨앗)으로도 들어가요.</p>");
     setTimeout(function () { var i = $("#ideaIn"); if (i) i.focus(); }, 50);
   }
   function crashSheet() {
     sheet("<h2>오늘 무너졌어요</h2><p>괜찮아요. 오늘의 목표는 잘하는 게 아니라 끊기지 않는 거예요. 이유를 하나 골라 주세요.</p><div class='opts'>" +
-      [["kid", "아이가 아파요"], ["family", "가족이 이번 주는 멈추자고 했어요"], ["work", "야근·회식이에요"], ["sleep", "잠을 못 잤어요"], ["just", "그냥 하기 싫어요"]].map(function (o) { return "<button class='ghost' data-act='why' data-k='" + o[0] + "'>" + o[1] + "</button>"; }).join("") + "</div>");
+      [["kid", "아이가 아파요"], ["family", "가족이 이번 주는 멈추자고 했어요"], ["work", "야근·회식이에요"], ["sleep", "잠을 못 잤어요"], ["just", "그냥 하기 싫어요"]].map(function (o) { return "<button class='ghost' data-act='why' data-k='" + o[0] + "'>" + o[1] + "</button>"; }).join("") + "</div>" +
+      "<p class='dim small' style='margin-top:14px'>보호권 이번 달 " + frzLeft() + "장 남음. 쓰면 연속이 끊기지 않고, 3줄은 써야 해요.</p>" + (frzLeft() > 0 ? "<button class='ghost' data-act='freeze'>보호권 쓰기</button>" : "") +
+      "<p class='dim small'>2주 넘게 기분이 계속 가라앉거나 잠이 무너지면 계획을 멈추고 처방의와 상의해요. 이 앱은 치료가 아니에요.</p>");
   }
   function crashAnswer(k) {
     var r = rec(TK), h;
@@ -354,7 +392,7 @@
     queueNode(nodeRow("p90j" + k.replace(/-/g, ""), { t: n.a || n.l1 || n.l2 || n.l3, s: x ? x.q : "", raw: text, g: x ? x.theme : "90일 기록", k: "기록", at: new Date(k).getTime() + 22 * 3600e3, del: n.map === false }));
   }
   function merge(a, b) {
-    var o = { v: 2, log: {}, notes: {}, ideas: [], gates: Object.assign({}, b.gates, a.gates), prep: Object.assign({}, b.prep, a.prep), u: Math.max(a.u || 0, b.u || 0) };
+    var o = { v: 2, pred: Object.assign({}, b.pred, a.pred), resv: Math.max(+a.resv || 0, +b.resv || 0), log: {}, notes: {}, ideas: [], gates: Object.assign({}, b.gates, a.gates), prep: Object.assign({}, b.prep, a.prep), u: Math.max(a.u || 0, b.u || 0) };
     ["log", "notes"].forEach(function (f) { var A = a[f] || {}, B = b[f] || {}; Object.keys(Object.assign({}, A, B)).forEach(function (k) { o[f][k] = !A[k] ? B[k] : !B[k] ? A[k] : ((A[k].t || 0) >= (B[k].t || 0) ? A[k] : B[k]); }); });
     var m = {}; (b.ideas || []).concat(a.ideas || []).forEach(function (i) { m[i.id] = m[i.id] && m[i.id].del ? m[i.id] : i; }); o.ideas = Object.keys(m).map(function (k) { return m[k]; }).sort(function (x, y) { return x.at - y.at; });
     return o;
@@ -408,7 +446,7 @@
     var a = t.dataset.act, r;
     if (a === "close") return closeSheet();
     if (a === "toggle") { r = rec(TK); r[t.dataset.k] = !r[t.dataset.k]; if (t.dataset.k === "work" && !r.work) r.min = false; touch(TK); save(); render(); if (r[t.dataset.k] && t.dataset.k === "work") toast("+2점 · 연속 " + streak("work") + "일"); return; }
-    if (a === "step") { r = rec(TK); r[t.dataset.k] = Math.max(0, (+r[t.dataset.k] || 0) + (+t.dataset.d)); touch(TK); save(); render(); if (+t.dataset.d > 0) toast(t.dataset.k === "pub" ? "+10점 · 공개 사다리를 한 칸 더" : "+5점"); return; }
+    if (a === "step") { r = rec(TK); r[t.dataset.k] = Math.max(0, (+r[t.dataset.k] || 0) + (+t.dataset.d)); touch(TK); save(); render(); if (+t.dataset.d > 0) toast(t.dataset.k === "pub" ? "+10점 · 공개 사다리를 한 칸 더" : t.dataset.k === "rej" ? "+3점 · 거절 " + stats().rej + "/30, 주사위를 굴렸어요" : "+5점"); return; }
     if (a === "round") return sheet(roundHtml(+t.dataset.i));
     if (a === "chapter") { var c = D.BOOK[+t.dataset.i]; return sheet("<p class='eyebrow'>교본</p><h2>" + esc(c[0]) + "</h2><ul class='plain'>" + c[1].map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + "</ul>"); }
     if (a === "lib") return libSheet(t.dataset.k);
@@ -417,10 +455,14 @@
     if (a === "crash") return crashSheet();
     if (a === "why") return crashAnswer(t.dataset.k);
     if (a === "min") { r = rec(TK); r.work = true; r.min = true; touch(TK); save(); closeSheet(); render(); return toast("최소 버전도 만든 날이에요"); }
-    if (a === "unex") { r = rec(TK); delete r.ex; touch(TK); save(); return render(); }
+    if (a === "unex") { r = rec(TK); delete r.ex; delete r.frz; touch(TK); save(); return render(); }
+    if (a === "freeze") { r = rec(TK); r.frz = true; touch(TK); save(); closeSheet(); render(); return toast("보호권을 썼어요. 자기 전에 3줄만 써요"); }
+    if (a === "timer") return tmrToggle();
+    if (a === "resv") { S.resv = Math.max(0, (+S.resv || 0) + (+t.dataset.d)); save(); render(); if (+t.dataset.d > 0 && S.resv === 3) toast("예약 3건! 만들기로 넘어가요"); return; }
+    if (a === "phase") return phaseSheet(+t.dataset.i);
     if (a === "idea") return ideaSheet();
     if (a === "saveidea") {
-      var v = ($("#ideaIn").value || "").trim(), who = ($("#ideaWho").value || "").trim(); if (!v) return toast("한 줄만 적어 주세요");
+      var v = ($("#ideaIn").value || "").trim(), who = ($("#ideaWho").value || "").trim(); if (!v) return toast("한 줄만 적어 주세요"); if (!who) return toast("'누가 돈을 내나'를 한 줄 적어야 세울 수 있어요");
       var it = { id: Date.now().toString(36), text: v + (who ? " — 누가 돈을 내나: " + who : ""), at: Date.now() }; S.ideas.push(it); save();
       queueNode(nodeRow("p90i" + it.id, { t: v, raw: it.text, g: "아이디어 주차장", k: "구상", at: it.at }));
       closeSheet(); render(); return toast("주차장에 세웠어요. 2월 14일에 봐요");
@@ -433,6 +475,7 @@
     var t = e.target;
     if (t.dataset.gate) { S.gates[t.dataset.gate] = t.checked; save(); return; }
     if (t.dataset.prep) { S.prep[t.dataset.prep] = t.checked; save(); return; }
+    if (t.dataset.pred != null) { S.pred = S.pred || {}; S.pred[t.dataset.pred] = +t.value; save(); return; }
     if (t.dataset.act === "mapnote") { var n = S.notes[TK] || (S.notes[TK] = {}); n.map = t.checked; n.t = Date.now(); save(); noteNode(TK); return; }
   });
   var noteTimer = 0;
